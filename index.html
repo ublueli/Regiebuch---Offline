@@ -8983,17 +8983,39 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
         // Bekannte formatierte Elemente verarbeiten (nicht rekursiv weitergehen)
         if (classList.contains('format-dialog')) {
           const nameEl = el.querySelector('.figur-name');
-          const textEl = el.querySelector('.dialog-text');
+          const textEls = el.querySelectorAll('.dialog-text');
           
-          if (nameEl && textEl) {
-            children.push(new Paragraph({
-              children: [
-                new TextRun({ text: nameEl.textContent, bold: true }),
-                new TextRun({ text: ' ' + textEl.textContent })
-              ],
-              spacing: { before: 60, after: 60 },
-              style: 'Dialog'
-            }));
+          // Namen extrahieren (kann leer sein)
+          const name = nameEl ? nameEl.textContent.trim() : '';
+          
+          // Alle dialog-text Elemente sammeln
+          let dialogText = '';
+          if (textEls.length > 0) {
+            textEls.forEach(t => {
+              dialogText += t.textContent + ' ';
+            });
+            dialogText = dialogText.trim();
+          }
+          
+          if (dialogText) {
+            if (name) {
+              // Dialog mit Figurname
+              children.push(new Paragraph({
+                children: [
+                  new TextRun({ text: name, bold: true }),
+                  new TextRun({ text: ' ' + dialogText })
+                ],
+                spacing: { before: 60, after: 60 },
+                style: 'Dialog'
+              }));
+            } else {
+              // Dialog ohne Figurname (Fortsetzung)
+              children.push(new Paragraph({
+                children: [new TextRun({ text: dialogText })],
+                spacing: { before: 60, after: 60 },
+                style: 'Dialog'
+              }));
+            }
           } else {
             // Fallback: Gesamten Text als Dialog exportieren
             const text = el.textContent.trim();
