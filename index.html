@@ -8,7 +8,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <!-- Supabase entfernt für Stand-alone Version -->
   <script>
     // PDF.js Worker konfigurieren
@@ -904,219 +903,6 @@
       color: #9333ea;
     }
   </style>
-  
-  <!-- ============================================ -->
-  <!-- GOOGLE DRIVE MODULE (wiederverwendbar)       -->
-  <!-- ============================================ -->
-  <script>
-    const GDRIVE_CLIENT_ID = '442649097645-159rgo1mpu0ptdkiq8up8tdc8dl5mvo2.apps.googleusercontent.com';
-    const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email';
-    const GDRIVE_API = 'https://www.googleapis.com/drive/v3';
-    const GDRIVE_UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
-    
-    // State
-    let gdriveToken = null;
-    let gdriveUser = null;
-    let gdriveFolderId = localStorage.getItem('nina_gdrive_folder_id') || null;
-    let gdriveFolderName = localStorage.getItem('nina_gdrive_folder_name') || null;
-    let gdriveTokenClient = null;
-    
-    // ---- AUTH ----
-    function gdriveInitAuth() {
-      if (!window.google?.accounts?.oauth2) {
-        console.warn('Google Identity Services not loaded yet');
-        return false;
-      }
-      gdriveTokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: GDRIVE_CLIENT_ID,
-        scope: GDRIVE_SCOPE,
-        callback: (response) => {
-          if (response.error) {
-            console.error('GDrive auth error:', response);
-            alert('❌ Google-Anmeldung fehlgeschlagen: ' + (response.error_description || response.error));
-            return;
-          }
-          gdriveToken = response.access_token;
-          console.log('GDrive: Token erhalten');
-          
-          // User-Info holen (non-blocking)
-          fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-            headers: { 'Authorization': 'Bearer ' + gdriveToken }
-          }).then(r => {
-            if (r.ok) return r.json();
-            throw new Error('Status ' + r.status);
-          }).then(info => {
-            gdriveUser = { name: info.name || '', email: info.email || '', picture: info.picture || '' };
-            localStorage.setItem('nina_gdrive_user', JSON.stringify(gdriveUser));
-            console.log('GDrive: User info geladen:', gdriveUser.email);
-            if (typeof render === 'function') render();
-          }).catch((err) => {
-            console.warn('GDrive: Userinfo nicht verfügbar:', err);
-            gdriveUser = { name: '', email: 'Verbunden', picture: '' };
-          });
-          
-          // Sofort UI aktualisieren (nicht auf Userinfo warten)
-          if (typeof render === 'function') render();
-          if (typeof gdriveOnConnected === 'function') gdriveOnConnected();
-        }
-      });
-      // Note: We don't restore cached token - user must re-authenticate each session
-      // But we keep cached user info for display after re-auth
-      try {
-        const cached = localStorage.getItem('nina_gdrive_user');
-        if (cached) gdriveUser = JSON.parse(cached);
-      } catch(e) {}
-      return true;
-    }
-    
-    function gdriveSignIn() {
-      if (!gdriveTokenClient) {
-        if (!gdriveInitAuth()) {
-          alert('⏳ Google-Dienst wird noch geladen. Bitte kurz warten und nochmal versuchen.');
-          return;
-        }
-      }
-      gdriveTokenClient.requestAccessToken();
-    }
-    
-    function gdriveSignOut() {
-      if (gdriveToken) {
-        google.accounts.oauth2.revoke(gdriveToken);
-      }
-      gdriveToken = null;
-      gdriveUser = null;
-      localStorage.removeItem('nina_gdrive_user');
-      if (typeof render === 'function') render();
-    }
-    
-    function gdriveIsConnected() {
-      return !!gdriveToken;
-    }
-    
-    // Prüfen ob User-Info gecacht ist (für UI-Anzeige)
-    function gdriveHasCachedUser() {
-      return !!gdriveUser;
-    }
-    
-    // ---- API HELPERS ----
-    async function gdriveFetch(url, options = {}) {
-      if (!gdriveToken) throw new Error('Nicht angemeldet');
-      const resp = await fetch(url, {
-        ...options,
-        headers: { 'Authorization': 'Bearer ' + gdriveToken, ...(options.headers || {}) }
-      });
-      if (resp.status === 401) {
-        gdriveToken = null;
-        gdriveUser = null;
-        localStorage.removeItem('nina_gdrive_user');
-        throw new Error('Sitzung abgelaufen – bitte erneut anmelden');
-      }
-      if (!resp.ok) {
-        const err = await resp.text();
-        throw new Error('Drive-Fehler: ' + resp.status + ' ' + err);
-      }
-      return resp;
-    }
-    
-    // ---- FOLDER ----
-    async function gdriveCreateFolder(name, parentId) {
-      const metadata = {
-        name: name,
-        mimeType: 'application/vnd.google-apps.folder',
-        ...(parentId ? { parents: [parentId] } : {})
-      };
-      const resp = await gdriveFetch(GDRIVE_API + '/files', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(metadata)
-      });
-      return await resp.json();
-    }
-    
-    async function gdriveListFolders() {
-      try {
-        const q = "mimeType='application/vnd.google-apps.folder' and trashed=false";
-        const resp = await gdriveFetch(GDRIVE_API + `/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=20`);
-        const data = await resp.json();
-        console.log('GDrive: Ordner gefunden:', data.files?.length || 0);
-        return data.files || [];
-      } catch(e) {
-        console.warn('GDrive: Ordner-Suche fehlgeschlagen:', e);
-        return [];
-      }
-    }
-    
-    async function gdriveListProjectFolders(parentId) {
-      const q = `mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
-      const resp = await gdriveFetch(GDRIVE_API + `/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)&orderBy=name`);
-      return (await resp.json()).files || [];
-    }
-    
-    async function gdriveSetFolder(id, name) {
-      gdriveFolderId = id;
-      gdriveFolderName = name;
-      localStorage.setItem('nina_gdrive_folder_id', id);
-      localStorage.setItem('nina_gdrive_folder_name', name);
-      if (typeof render === 'function') render();
-    }
-    
-    // ---- FILE OPERATIONS ----
-    async function gdriveSaveFile(fileName, jsonData, folderId) {
-      const targetFolder = folderId || gdriveFolderId;
-      if (!targetFolder) throw new Error('Kein Ordner ausgewählt');
-      
-      // Check if file already exists in folder
-      const q = `name='${fileName}' and '${targetFolder}' in parents and trashed=false`;
-      const searchResp = await gdriveFetch(GDRIVE_API + `/files?q=${encodeURIComponent(q)}&fields=files(id)`);
-      const existing = (await searchResp.json()).files || [];
-      
-      const content = JSON.stringify(jsonData, null, 2);
-      const blob = new Blob([content], { type: 'application/json' });
-      
-      if (existing.length > 0) {
-        // Update existing file
-        const fileId = existing[0].id;
-        const resp = await gdriveFetch(GDRIVE_UPLOAD_API + `/files/${fileId}?uploadType=media`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: blob
-        });
-        return await resp.json();
-      } else {
-        // Create new file (multipart upload)
-        const metadata = { name: fileName, parents: [targetFolder] };
-        const form = new FormData();
-        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-        form.append('file', blob);
-        
-        const resp = await fetch(GDRIVE_UPLOAD_API + '/files?uploadType=multipart', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + gdriveToken },
-          body: form
-        });
-        if (!resp.ok) throw new Error('Upload fehlgeschlagen: ' + resp.status);
-        return await resp.json();
-      }
-    }
-    
-    async function gdriveListFiles(folderId) {
-      const targetFolder = folderId || gdriveFolderId;
-      if (!targetFolder) return [];
-      const q = `'${targetFolder}' in parents and trashed=false and mimeType='application/json'`;
-      const resp = await gdriveFetch(GDRIVE_API + `/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,size)&orderBy=modifiedTime desc`);
-      return (await resp.json()).files || [];
-    }
-    
-    async function gdriveLoadFile(fileId) {
-      const resp = await gdriveFetch(GDRIVE_API + `/files/${fileId}?alt=media`);
-      return await resp.json();
-    }
-    
-    // Init on load
-    window.addEventListener('load', () => {
-      setTimeout(() => gdriveInitAuth(), 500);
-    });
-  </script>
 </head>
 <body class="bg-gray-100">
   <div id="app"></div>
@@ -1180,7 +966,18 @@
     // ============================================
     // UTILITIES
     // ============================================
-    const save = (key, data) => localStorage.setItem(key, JSON.stringify(data));
+    const save = (key, data) => {
+      try {
+        localStorage.setItem(key, JSON.stringify(data));
+      } catch(e) {
+        if (e.name === 'QuotaExceededError') {
+          console.error('⚠️ localStorage voll! Key:', key, 'Grösse:', JSON.stringify(data).length);
+          alert('⚠️ Speicher voll!\n\nDer lokale Speicher ist erschöpft. Bitte exportiere ein Backup und lösche ungenutzte Projekte.\n\nTipp: Grosse Bilder werden jetzt automatisch in einer separaten Datenbank gespeichert.');
+        } else {
+          throw e;
+        }
+      }
+    };
     const load = (key, def = null) => { try { return JSON.parse(localStorage.getItem(key)) || def; } catch { return def; } };
     const genId = () => 'id_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     
@@ -1430,6 +1227,55 @@
         };
         request.onerror = () => reject(request.error);
       });
+    }
+    
+    // Titelbild-Referenz auflösen (idb: → Object-URL, oder base64 direkt)
+    const titelbildCache = {};
+    async function resolveTitelbild(ref) {
+      if (!ref) return '';
+      if (ref.startsWith('idb:')) {
+        if (titelbildCache[ref]) return titelbildCache[ref];
+        try {
+          const imgId = ref.substring(4);
+          const result = await loadImageFromDB(imgId);
+          if (result?.url) {
+            titelbildCache[ref] = result.url;
+            return result.url;
+          }
+        } catch(e) { console.warn('Titelbild laden fehlgeschlagen:', e); }
+        return '';
+      }
+      return ref; // base64 oder andere URL direkt
+    }
+    
+    // Titelbild in einem img-Element anzeigen (async laden)
+    function showTitelbildAsync(imgElementId, ref) {
+      if (!ref) return;
+      if (ref.startsWith('idb:')) {
+        resolveTitelbild(ref).then(url => {
+          const img = document.getElementById(imgElementId);
+          if (img && url) img.src = url;
+        });
+      }
+    }
+    
+    // Titelbild für Export als base64 auflösen
+    async function resolveTitelbildForExport(ref) {
+      if (!ref) return '';
+      if (!ref.startsWith('idb:')) return ref; // bereits base64 oder URL
+      try {
+        const imgId = ref.substring(4);
+        const result = await loadImageFromDB(imgId);
+        if (result?.data) {
+          const blob = new Blob([result.data.data], { type: result.data.type });
+          return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result); // data:image/...;base64,...
+            reader.readAsDataURL(blob);
+          });
+        }
+      } catch(e) { console.warn('Titelbild export resolve failed:', e); }
+      return '';
     }
     
     // Temporärer Cache für geladene Bild-URLs
@@ -2614,36 +2460,88 @@ was morgen kommt – wer ist dabei?</p>
         const istCloudProjekt = !!currentCloudProjectId;
         
         if (hatDaten) {
-          let warnung;
-          if (istCloudProjekt) {
-            // Cloud-Projekt: Daten sind sicher
-            warnung = `📝 Neues Projekt erstellen\n\n` +
-              `Das aktuelle Projekt "${state.projektMeta.titel || 'Unbenannt'}" enthält:\n` +
-              `• ${state.szenen.length} Szenen\n` +
-              `• ${state.figuren.length} Figuren\n` +
-              `• ${state.cues.length} Cues\n\n` +
-              `☁️ Das Projekt ist in der Cloud gespeichert und bleibt erhalten.\n\n` +
-              `Neues Projekt erstellen?`;
-          } else {
-            // Nur lokal: Warnung anzeigen
-            warnung = `⚠️ ACHTUNG: Neues Projekt erstellen\n\n` +
-              `Das aktuelle Projekt "${state.projektMeta.titel || 'Unbenannt'}" enthält:\n` +
-              `• ${state.szenen.length} Szenen\n` +
-              `• ${state.figuren.length} Figuren\n` +
-              `• ${state.cues.length} Cues\n\n` +
-              `Diese Daten werden nur lokal im Browser gespeichert.\n` +
-              `Wenn der Browser-Cache gelöscht wird, sind sie WEG!\n\n` +
-              `📥 Empfehlung: Erst EXPORTIEREN (Projekt-Backup),\n` +
-              `dann neues Projekt erstellen.\n\n` +
-              `Trotzdem fortfahren?`;
-          }
+          // Custom-Dialog mit Export-Option anzeigen
+          const modalHtml = `
+            <div id="neues-projekt-warnung" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;">
+              <div style="background:white;border-radius:16px;padding:1.5rem;max-width:420px;width:90%;box-shadow:0 25px 60px rgba(0,0,0,0.3);">
+                <h3 style="margin:0 0 0.8rem;font-size:1.05rem;">⚠️ Neues Projekt erstellen</h3>
+                <p style="font-size:0.85rem;color:#374151;margin:0 0 0.5rem;">
+                  Das aktuelle Projekt <strong>"${state.projektMeta.titel || 'Unbenannt'}"</strong> enthält:
+                </p>
+                <div style="font-size:0.82rem;color:#555;margin:0 0 0.8rem;padding-left:0.5rem;">
+                  • ${state.szenen.length} Szenen &nbsp;• ${state.figuren.length} Figuren &nbsp;• ${state.cues.length} Cues
+                </div>
+                ${istCloudProjekt ? `
+                  <p style="font-size:0.8rem;color:#059669;margin:0 0 1rem;">☁️ Das Projekt ist in der Cloud gespeichert und bleibt erhalten.</p>
+                ` : `
+                  <p style="font-size:0.8rem;color:#b91c1c;margin:0 0 1rem;">
+                    💾 Diese Daten sind nur lokal im Browser gespeichert.<br>
+                    Empfehlung: Zuerst ein Backup exportieren!
+                  </p>
+                `}
+                <div style="display:flex;gap:0.5rem;justify-content:flex-end;flex-wrap:wrap;">
+                  <button id="np-cancel" style="padding:6px 14px;border:1px solid #d1d5db;background:white;border-radius:8px;font-size:0.8rem;cursor:pointer;color:#374151;">Abbrechen</button>
+                  <button id="np-export" style="padding:6px 14px;border:none;background:#2563eb;color:white;border-radius:8px;font-size:0.8rem;cursor:pointer;">💾 Zuerst exportieren</button>
+                  <button id="np-continue" style="padding:6px 14px;border:none;background:#dc2626;color:white;border-radius:8px;font-size:0.8rem;cursor:pointer;">Neues Projekt</button>
+                </div>
+              </div>
+            </div>
+          `;
+          document.body.insertAdjacentHTML('beforeend', modalHtml);
           
-          if (!confirm(warnung)) {
-            return;
-          }
+          return new Promise((resolve) => {
+            document.getElementById('np-cancel').onclick = () => {
+              document.getElementById('neues-projekt-warnung').remove();
+              resolve('cancel');
+            };
+            document.getElementById('np-export').onclick = () => {
+              document.getElementById('neues-projekt-warnung').remove();
+              state.showExportModal = true;
+              render();
+              resolve('cancel');
+            };
+            document.getElementById('np-continue').onclick = () => {
+              document.getElementById('neues-projekt-warnung').remove();
+              
+              // Altes Projekt sichern, dann State leeren
+              saveProjektDaten();
+              state.figuren = [];
+              state.szenen = [];
+              state.cues = [];
+              state.textbuch = {};
+              state.requisiten = [];
+              state.kostueme = [];
+              state.medien = [];
+              state.buehne = [];
+              state.fassungen = [];
+              state.konzept = { treatment: [], fundament: { kern: '', logline: '', unaussprechliches: '', emotionalerBogen: '', konflikt: '' }, werte: [], motive: [] };
+              state.beziehungen = [];
+              state.rechercheMaterial = [];
+              state.musikkonzept = { text: '', stuecke: [] };
+              state.ensemble = [];
+              state.team = [];
+              state.probeplan = [];
+              state.aktiveSzene = null;
+              
+              // Neues Projekt Modal öffnen
+              editingProjekt = {
+                id: null,
+                name: '',
+                titel: '',
+                untertitel: '',
+                autor: '',
+                fassung: 'Arbeitsfassung'
+              };
+              state.showProjektModal = true;
+              render();
+              resolve('continue');
+            };
+          });
         }
         
-        // Neues Projekt
+        if (hatDaten) return; // Modal-Dialog übernimmt den Rest asynchron
+        
+        // Neues Projekt (kein bestehendes Projekt vorhanden)
         editingProjekt = {
           id: null,
           name: '',
@@ -2717,7 +2615,7 @@ was morgen kommt – wer ist dabei?</p>
                   <label class="block text-xs font-medium text-gray-700 mb-1">Titelbild</label>
                   <div class="flex gap-2 items-center">
                     ${p.titelbild ? `
-                      <img src="${p.titelbild}" class="w-16 h-16 object-cover rounded border" id="titelbild-preview">
+                      <img src="${p.titelbild.startsWith('idb:') ? '' : p.titelbild}" ${p.titelbild.startsWith('idb:') ? `data-idb-src="${p.titelbild}"` : ''} class="w-16 h-16 object-cover rounded border" id="titelbild-preview">
                       <button class="btn btn-xs btn-outline" onclick="removeTitelbild()">×</button>
                     ` : `<div id="titelbild-preview-container"></div>`}
                     <input type="file" id="projekt-titelbild" accept="image/*" class="text-xs flex-1"
@@ -2824,35 +2722,38 @@ was morgen kommt – wer ist dabei?</p>
     
     // Titelbild-Handling
     let pendingTitelbild = null;
+    let pendingTitelbildFile = null; // Original File für IndexedDB
     
     function handleTitelbildUpload(input) {
       const file = input.files[0];
       if (!file) return;
       
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        pendingTitelbild = e.target.result;
-        // Preview zeigen
-        let preview = document.getElementById('titelbild-preview');
-        if (!preview) {
-          const container = document.getElementById('titelbild-preview-container');
-          if (container) {
-            container.innerHTML = '<img id="titelbild-preview" class="w-16 h-16 object-cover rounded border">';
-            preview = document.getElementById('titelbild-preview');
-          }
+      // Bild komprimieren und als Object-URL für Preview verwenden
+      pendingTitelbildFile = file;
+      
+      // Preview erzeugen
+      const previewUrl = URL.createObjectURL(file);
+      pendingTitelbild = previewUrl; // Temporär für Preview
+      
+      let preview = document.getElementById('titelbild-preview');
+      if (!preview) {
+        const container = document.getElementById('titelbild-preview-container');
+        if (container) {
+          container.innerHTML = '<img id="titelbild-preview" class="w-16 h-16 object-cover rounded border">';
+          preview = document.getElementById('titelbild-preview');
         }
-        if (preview) preview.src = pendingTitelbild;
-      };
-      reader.readAsDataURL(file);
+      }
+      if (preview) preview.src = previewUrl;
     }
     
     function removeTitelbild() {
       pendingTitelbild = '';
+      pendingTitelbildFile = null;
       if (editingProjekt) editingProjekt.titelbild = '';
       render();
     }
     
-    function saveProjekt() {
+    async function saveProjekt() {
       const name = document.getElementById('projekt-name').value.trim();
       if (!name) {
         alert('Bitte einen Projektnamen eingeben.');
@@ -2860,12 +2761,47 @@ was morgen kommt – wer ist dabei?</p>
       }
       
       // API-Key wird jetzt direkt im onchange gespeichert
-      // Hier nur noch sicherstellen, dass er aktuell ist
       const apiKeyInput = document.getElementById('projekt-apikey');
       if (apiKeyInput) {
         const apiKey = apiKeyInput.value.trim();
         if (apiKey) {
           localStorage.setItem('nina_rebu_api_key', apiKey);
+        }
+      }
+      
+      // Titelbild: In IndexedDB speichern, nur Referenz in localStorage
+      let titelbildRef = editingProjekt?.titelbild || '';
+      const projektId = editingProjekt?.id || genId();
+      
+      if (pendingTitelbildFile) {
+        // Neues Bild hochgeladen → in IndexedDB speichern
+        const imgId = 'titelbild_' + projektId;
+        try {
+          await saveImageToDB(imgId, pendingTitelbildFile);
+          titelbildRef = 'idb:' + imgId; // Referenz statt Base64
+          console.log('✅ Titelbild in IndexedDB gespeichert:', imgId);
+        } catch(e) {
+          console.error('Titelbild-Speicherung fehlgeschlagen:', e);
+          titelbildRef = ''; // Fallback: kein Bild
+        }
+      } else if (pendingTitelbild === '') {
+        // Bild wurde entfernt
+        titelbildRef = '';
+      }
+      // Falls pendingTitelbild null → bestehendes Bild beibehalten (titelbildRef bleibt)
+      
+      // Bestehende base64-Titelbilder migrieren
+      if (titelbildRef && titelbildRef.startsWith('data:image/') && titelbildRef.length > 1000) {
+        try {
+          const imgId = 'titelbild_' + projektId;
+          const resp = await fetch(titelbildRef);
+          const blob = await resp.blob();
+          const file = new File([blob], 'titelbild.jpg', { type: blob.type });
+          await saveImageToDB(imgId, file);
+          titelbildRef = 'idb:' + imgId;
+          console.log('✅ Titelbild migriert: base64 → IndexedDB');
+        } catch(e) {
+          console.warn('Migration fehlgeschlagen, behalte base64:', e);
         }
       }
       
@@ -2876,11 +2812,10 @@ was morgen kommt – wer ist dabei?</p>
         copyright: document.getElementById('projekt-copyright')?.value.trim() || '',
         tagline: document.getElementById('projekt-tagline')?.value.trim() || '',
         logline: document.getElementById('projekt-logline')?.value.trim() || '',
-        titelbild: pendingTitelbild !== null ? pendingTitelbild : (editingProjekt?.titelbild || ''),
+        titelbild: titelbildRef,
         fassung: document.getElementById('projekt-fassung').value.trim() || 'Arbeitsfassung',
         premiere: document.getElementById('projekt-premiere').value,
         spielort: document.getElementById('projekt-spielort').value.trim(),
-        // v2.0: eigeneGruppen werden direkt über addGruppe/renameGruppe/deleteGruppe geändert
         fassungsDatum: new Date().toISOString()
       };
       
@@ -2899,7 +2834,7 @@ was morgen kommt – wer ist dabei?</p>
         saveProjektDaten();
       } else {
         // Neues Projekt erstellen
-        const neueId = genId();
+        const neueId = projektId;
         projekte.push({
           id: neueId,
           name: name,
@@ -2909,7 +2844,6 @@ was morgen kommt – wer ist dabei?</p>
         
         // Standard-Szene für neues Projekt erstellen
         const startSzeneId = genId();
-        // v2.0: Erste Gruppe aus eigeneGruppen verwenden (falls vorhanden)
         const ersteGruppe = state.projektMeta.eigeneGruppen?.[0] || 'Erster Akt';
         const startSzene = {
           id: startSzeneId,
@@ -2922,7 +2856,6 @@ was morgen kommt – wer ist dabei?</p>
           figuren: []
         };
         
-        // v2.0: eigeneGruppen initialisieren falls noch nicht vorhanden
         if (!projektDaten.eigeneGruppen) {
           projektDaten.eigeneGruppen = ['Erster Akt'];
         }
@@ -2930,7 +2863,7 @@ was morgen kommt – wer ist dabei?</p>
         // Daten für neues Projekt speichern
         save(KEYS.projektMeta(neueId), projektDaten);
         save(KEYS.figuren(neueId), []);
-        save(KEYS.szenen(neueId), [startSzene]);  // Mit Start-Szene!
+        save(KEYS.szenen(neueId), [startSzene]);
         save(KEYS.textbuch(neueId), { [startSzeneId]: '<p class="format-standard"><br></p>' });
         save(KEYS.cues(neueId), []);
         save(KEYS.fassungen(neueId), []);
@@ -2946,6 +2879,7 @@ was morgen kommt – wer ist dabei?</p>
       closeModal('showProjektModal');
       editingProjekt = null;
       pendingTitelbild = null;
+      pendingTitelbildFile = null;
     }
     
     function deleteProjekt(projektId) {
@@ -2988,7 +2922,7 @@ was morgen kommt – wer ist dabei?</p>
     // ============================================
     // DRAMERA IMPORT/EXPORT
     // ============================================
-    function importFromDramera(jsonData) {
+    async function importFromDramera(jsonData) {
       try {
         const dramera = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
         
@@ -2999,6 +2933,23 @@ was morgen kommt – wer ist dabei?</p>
           // ProjektMeta wiederherstellen (wenn vorhanden)
           if (d.projektMeta) {
             state.projektMeta = { ...state.projektMeta, ...d.projektMeta };
+          }
+          
+          // Titelbild: base64 → IndexedDB migrieren
+          if (state.projektMeta.titelbild && state.projektMeta.titelbild.startsWith('data:image/') && state.projektMeta.titelbild.length > 1000) {
+            try {
+              const projektId = state.aktiveProjektId || 'import_' + Date.now();
+              const imgId = 'titelbild_' + projektId;
+              const resp = await fetch(state.projektMeta.titelbild);
+              const blob = await resp.blob();
+              const file = new File([blob], 'titelbild.jpg', { type: blob.type });
+              await saveImageToDB(imgId, file);
+              state.projektMeta.titelbild = 'idb:' + imgId;
+              console.log('✅ Import: Titelbild in IndexedDB migriert');
+            } catch(e) {
+              console.warn('Import: Titelbild-Migration fehlgeschlagen:', e);
+              state.projektMeta.titelbild = ''; // Lieber leer als localStorage sprengen
+            }
           }
           
           if (d.autor) {
@@ -5007,6 +4958,17 @@ WICHTIGE REGELN:
       if (state.currentlyPlaying && state.currentView === 'textbuch') {
         requestAnimationFrame(() => updateBottomPlayer());
       }
+      
+      // Post-render: idb:-Titelbilder asynchron laden
+      requestAnimationFrame(() => {
+        document.querySelectorAll('img[data-idb-src]').forEach(async (img) => {
+          const ref = img.getAttribute('data-idb-src');
+          if (ref) {
+            const url = await resolveTitelbild(ref);
+            if (url) img.src = url;
+          }
+        });
+      });
     }
 
     function renderSidebar() {
@@ -5237,7 +5199,7 @@ WICHTIGE REGELN:
             <!-- Titelseite -->
             <div class="bg-white rounded-lg shadow-lg p-12 mb-8 text-center">
               ${meta.titelbild ? `
-                <img src="${meta.titelbild}" alt="Titelbild" class="w-64 h-auto mx-auto mb-8 rounded-lg shadow">
+                <img src="${meta.titelbild.startsWith('idb:') ? '' : meta.titelbild}" ${meta.titelbild.startsWith('idb:') ? `data-idb-src="${meta.titelbild}"` : ''} alt="Titelbild" class="w-64 h-auto mx-auto mb-8 rounded-lg shadow">
               ` : `
                 <div class="w-64 h-40 mx-auto mb-8 bg-gradient-to-br from-blue-100 to-purple-100 rounded-lg flex items-center justify-center">
                   <span class="text-6xl">🎭</span>
@@ -8039,9 +8001,6 @@ WICHTIGE REGELN:
                 <button class="import-tab px-4 py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-700" data-tab="text" onclick="showImportTab('text')">
                   📝 Text
                 </button>
-                <button class="import-tab px-4 py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-700" data-tab="gdrive" onclick="showImportTab('gdrive')">
-                  ☁️ Drive
-                </button>
               </div>
               
               <!-- Word/PDF Tab (NEU - Primär) -->
@@ -8083,10 +8042,11 @@ WICHTIGE REGELN:
               <div id="import-tab-nina" style="display: none;">
                 <div style="background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(20,184,166,0.1)); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
                   <p style="font-size: 14px; color: #374151; margin-bottom: 8px;">
-                    <strong>🔄 Daten aus Werkbank oder Probeplan übernehmen</strong>
+                    <strong>🔄 Import aus Dramera Werkbank</strong>
                   </p>
                   <p style="font-size: 12px; color: #6b7280;">
-                    Lade hier eine Austausch-Datei, die jemand aus der Werkbank oder dem Probeplan exportiert hat. Figuren, Szenen und weitere Daten werden in dein aktuelles Projekt übernommen.
+                    Importiere Figuren und Szenen, die du in Dramera entwickelt hast.
+                    Die Daten werden in dein aktuelles Projekt übernommen.
                   </p>
                 </div>
                 
@@ -8149,11 +8109,6 @@ WICHTIGE REGELN:
                   <button class="btn btn-outline flex-1" onclick="closeModal('showImportModal')">Abbrechen</button>
                   <button class="btn btn-primary flex-1" onclick="doImportText()">📥 Importieren</button>
                 </div>
-              </div>
-              
-              <!-- Google Drive Tab -->
-              <div id="import-tab-gdrive" style="display: none;">
-                ${renderGdriveImportTab()}
               </div>
             </div>
           </div>
@@ -8490,13 +8445,6 @@ WICHTIGE REGELN:
       document.getElementById('import-tab-nina').style.display = tab === 'nina' ? 'block' : 'none';
       document.getElementById('import-tab-dramera').style.display = tab === 'dramera' ? 'block' : 'none';
       document.getElementById('import-tab-text').style.display = tab === 'text' ? 'block' : 'none';
-      const gdriveTab = document.getElementById('import-tab-gdrive');
-      if (gdriveTab) gdriveTab.style.display = tab === 'gdrive' ? 'block' : 'none';
-      
-      // Bei Drive-Tab: Dateien laden wenn verbunden
-      if (tab === 'gdrive' && gdriveIsConnected() && gdriveFolderId && gdriveImportFiles.length === 0) {
-        gdriveRefreshFiles();
-      }
       
       // Tab-Buttons aktualisieren
       document.querySelectorAll('.import-tab').forEach(btn => {
@@ -8607,7 +8555,7 @@ WICHTIGE REGELN:
             fassungsDatum: p.version_date || state.projektMeta.fassungsDatum || '',
             strukturTyp: p.structure_type || state.projektMeta.strukturTyp || 'akte'
           };
-          save(KEYS.projektMeta(projektId), state.projektMeta);
+          save(KEYS.meta(projektId), state.projektMeta);
         }
         
         // Bestehende Daten laden
@@ -8745,247 +8693,6 @@ WICHTIGE REGELN:
           state.cues = newCues;
         }
         
-        // === KONZEPT IMPORTIEREN ===
-        let importedKonzept = false;
-        if (data.konzept) {
-          const k = data.konzept;
-          const existingKonzept = load(KEYS.konzept(projektId), {
-            treatment: [], fundament: { kern: '', logline: '', unaussprechliches: '', emotionalerBogen: '', konflikt: '' },
-            werte: [], motive: []
-          });
-          
-          // Treatment
-          if (k.treatment) {
-            if (typeof k.treatment === 'string' && k.treatment) {
-              existingKonzept.treatment = [{ id: genId(), titel: 'Treatment', text: k.treatment, sortOrder: 0 }];
-            } else if (Array.isArray(k.treatment) && k.treatment.length > 0) {
-              existingKonzept.treatment = k.treatment;
-            }
-          }
-          
-          // Fundament
-          if (k.fundament) {
-            existingKonzept.fundament = {
-              kern: k.fundament.kern || existingKonzept.fundament.kern || '',
-              logline: k.fundament.logline || existingKonzept.fundament.logline || '',
-              unaussprechliches: k.fundament.unaussprechliches || existingKonzept.fundament.unaussprechliches || '',
-              emotionalerBogen: k.fundament.emotionaler_bogen || k.fundament.emotionalerBogen || existingKonzept.fundament.emotionalerBogen || '',
-              konflikt: k.fundament.konflikt || existingKonzept.fundament.konflikt || ''
-            };
-          }
-          
-          // Werte (Wertequadrate)
-          if (k.werte && k.werte.length > 0) {
-            existingKonzept.werte = k.werte.map(w => ({
-              id: w.id || genId(),
-              wert1: w.virtue_a || w.wert1 || '',
-              wert2: w.virtue_b || w.wert2 || '',
-              wert3: w.excess_a || w.exaggeration_a || w.wert3 || '',
-              wert4: w.excess_b || w.exaggeration_b || w.wert4 || '',
-              figurIds: w.zuordnung ? Object.keys(w.zuordnung).map(fId => figurenIdMap[fId] || fId) : (w.figurIds || [])
-            }));
-          }
-          
-          // Motive
-          if (k.motive && k.motive.length > 0) {
-            existingKonzept.motive = k.motive.map(m => ({
-              id: m.id || genId(),
-              name: m.text || m.name || '',
-              bedeutung: m.beschreibung || m.bedeutung || '',
-              betrachtungen: m.betrachtungen || ''
-            }));
-          }
-          
-          state.konzept = existingKonzept;
-          save(KEYS.konzept(projektId), state.konzept);
-          importedKonzept = true;
-        }
-        
-        // === THEMES → KONZEPT.MOTIVE (falls kein konzept.motive vorhanden) ===
-        let importedThemes = 0;
-        if (data.themes && data.themes.length > 0 && (!state.konzept.motive || state.konzept.motive.length === 0)) {
-          state.konzept.motive = data.themes.map(t => ({
-            id: t.id || genId(),
-            name: t.text || t.name || '',
-            bedeutung: t.beschreibung || '',
-            betrachtungen: ''
-          }));
-          save(KEYS.konzept(projektId), state.konzept);
-          importedThemes = data.themes.length;
-        }
-        
-        // === RECHERCHE → RECHERCHEMATERIAL ===
-        let importedRecherche = 0;
-        if (data.recherche && data.recherche.length > 0) {
-          const existingRecherche = load(KEYS.rechercheMaterial(projektId), []);
-          const newRecherche = [...existingRecherche];
-          
-          for (const r of data.recherche) {
-            newRecherche.push({
-              id: r.id || genId(),
-              typ: r.kategorie === 'Bild' ? 'bild' : (r.url ? 'link' : 'text'),
-              titel: r.titel || r.title || 'Material',
-              inhalt: r.text || r.inhalt || '',
-              url: r.url || r.quelle || '',
-              bildData: r.bildData || r.image_data || '',
-              szeneIds: r.szeneIds || [],
-              tags: r.tags || (r.kategorie ? [r.kategorie] : [])
-            });
-            importedRecherche++;
-          }
-          
-          state.rechercheMaterial = newRecherche;
-          save(KEYS.rechercheMaterial(projektId), state.rechercheMaterial);
-        }
-        
-        // === MUSIKKONZEPT ===
-        let importedMusik = false;
-        if (data.musikkonzept) {
-          const mk = data.musikkonzept;
-          state.musikkonzept = {
-            text: mk.konzept_text || mk.text || '',
-            stuecke: (mk.stueckliste || mk.stuecke || []).map(s => ({
-              id: s.id || genId(),
-              titel: s.titel || '',
-              kuenstler: s.kuenstler || '',
-              szeneIds: s.szeneIds || [],
-              einsatz: s.einsatz || '',
-              notizen: s.notizen || ''
-            }))
-          };
-          save(KEYS.musikkonzept(projektId), state.musikkonzept);
-          importedMusik = (state.musikkonzept.text || state.musikkonzept.stuecke.length > 0);
-        }
-        
-        // === BEZIEHUNGEN ===
-        let importedBeziehungen = 0;
-        if (data.beziehungen && data.beziehungen.length > 0) {
-          const existingBez = load(KEYS.beziehungen(projektId), []);
-          const newBez = [...existingBez];
-          
-          for (const b of data.beziehungen) {
-            const figur1 = figurenIdMap[b.figure_a] || b.figure_a || b.figur1Id;
-            const figur2 = figurenIdMap[b.figure_b] || b.figure_b || b.figur2Id;
-            
-            // Duplikate vermeiden
-            const exists = newBez.some(eb => 
-              (eb.figur1Id === figur1 && eb.figur2Id === figur2) ||
-              (eb.figur1Id === figur2 && eb.figur2Id === figur1)
-            );
-            
-            if (!exists && figur1 && figur2) {
-              newBez.push({
-                id: b.id || genId(),
-                figur1Id: figur1,
-                figur2Id: figur2,
-                art: b.type || b.art || '',
-                beschreibung: b.description || b.beschreibung || '',
-                richtung: b.richtung || 'beidseiting'
-              });
-              importedBeziehungen++;
-            }
-          }
-          
-          state.beziehungen = newBez;
-          save(KEYS.beziehungen(projektId), state.beziehungen);
-        }
-        
-        // === ENSEMBLE (aus persons mit category=ensemble) ===
-        let importedEnsemble = 0;
-        const ensemblePersons = (data.persons || []).filter(p => p.category === 'ensemble' || !p.category);
-        if (ensemblePersons.length > 0) {
-          const existingEnsemble = load(KEYS.ensemble(projektId), []);
-          const newEnsemble = [...existingEnsemble];
-          const personIdMap = {};
-          
-          for (const person of ensemblePersons) {
-            const name = (person.name || '').toLowerCase();
-            const existing = newEnsemble.find(e => (e.name || '').toLowerCase() === name);
-            if (existing) { personIdMap[person.id] = existing.id; continue; }
-            
-            const newId = genId();
-            personIdMap[person.id] = newId;
-            
-            // Rollen-IDs ermitteln via Castings
-            const rolleIds = (data.castings || [])
-              .filter(c => c.person_id === person.id)
-              .map(c => figurenIdMap[c.figure_id] || c.figure_id)
-              .filter(Boolean);
-            
-            const addr = person.address || {};
-            const adresse = [addr.street, addr.number, addr.zip, addr.city].filter(Boolean).join(' ');
-            
-            newEnsemble.push({
-              id: newId,
-              name: person.name || '',
-              email: person.email || '',
-              telefon: person.phone || person.telefon || '',
-              adresse: adresse,
-              rolleIds: rolleIds,
-              notizen: person.notes || ''
-            });
-            importedEnsemble++;
-          }
-          
-          state.ensemble = newEnsemble;
-          save(KEYS.ensemble(projektId), state.ensemble);
-        }
-        
-        // === KÜNSTLERISCHES TEAM (aus persons mit category=artistic_team) ===
-        let importedTeam = 0;
-        const teamPersons = (data.persons || []).filter(p => p.category === 'artistic_team');
-        if (teamPersons.length > 0) {
-          const existingTeam = load(KEYS.team(projektId), []);
-          const newTeam = [...existingTeam];
-          
-          for (const person of teamPersons) {
-            const name = (person.name || '').toLowerCase();
-            const existing = newTeam.find(t => (t.name || '').toLowerCase() === name);
-            if (existing) continue;
-            
-            newTeam.push({
-              id: genId(),
-              name: person.name || '',
-              funktion: person.function || person.role || '',
-              email: person.email || '',
-              telefon: person.phone || person.telefon || '',
-              notizen: person.notes || ''
-            });
-            importedTeam++;
-          }
-          
-          state.team = newTeam;
-          save(KEYS.team(projektId), state.team);
-        }
-        
-        // === PROBEPLAN (aus rehearsals) ===
-        let importedProben = 0;
-        if (data.rehearsals && data.rehearsals.length > 0) {
-          const existingProben = load(KEYS.probeplan(projektId), []);
-          const newProben = [...existingProben];
-          
-          for (const r of data.rehearsals) {
-            // Duplikat-Check: gleiches Datum + gleiche Zeit
-            const exists = newProben.some(p => p.datum === r.date && p.zeit === (r.start_time + '–' + r.end_time));
-            if (exists) continue;
-            
-            newProben.push({
-              id: genId(),
-              datum: r.date || '',
-              zeit: (r.start_time || '') + (r.end_time ? '–' + r.end_time : ''),
-              ort: r.location || '',
-              typ: r.rehearsal_type || '',
-              szeneIds: (r.scene_ids || []).map(sid => szenenIdMap[sid] || sid),
-              figurIds: [],
-              notizen: r.notes || ''
-            });
-            importedProben++;
-          }
-          
-          state.probeplan = newProben;
-          save(KEYS.probeplan(projektId), state.probeplan);
-        }
-        
         // State aktualisieren
         state.figuren = newFiguren;
         state.szenen = newSzenen;
@@ -9052,21 +8759,13 @@ WICHTIGE REGELN:
         render();
         
         // Erfolgsmeldung
-        let msg = '✅ NINA-Exchange Import erfolgreich!\n\n';
+        let msg = '✅ NINA-Exchange v2.0 Import erfolgreich!\n\n';
         msg += '👤 Figuren: ' + importedFiguren + ' neu';
         if (skippedFiguren > 0) msg += ', ' + skippedFiguren + ' übersprungen';
         msg += '\n🎬 Szenen: ' + importedSzenen + ' neu';
         if (skippedSzenen > 0) msg += ', ' + skippedSzenen + ' übersprungen';
         msg += '\n📝 Texte: ' + importedTexte + ' importiert';
         if (importedCues > 0) msg += '\n🎛️ Cues: ' + importedCues + ' importiert';
-        if (importedKonzept) msg += '\n🎯 Konzept importiert';
-        if (importedThemes > 0) msg += '\n🏷️ Themen: ' + importedThemes + ' als Motive';
-        if (importedRecherche > 0) msg += '\n📚 Recherche: ' + importedRecherche + ' Einträge';
-        if (importedMusik) msg += '\n🎵 Musikkonzept importiert';
-        if (importedBeziehungen > 0) msg += '\n🔗 Beziehungen: ' + importedBeziehungen + ' importiert';
-        if (importedEnsemble > 0) msg += '\n🎭 Ensemble: ' + importedEnsemble + ' Mitglieder';
-        if (importedTeam > 0) msg += '\n🎨 Künstl. Team: ' + importedTeam + ' Mitglieder';
-        if (importedProben > 0) msg += '\n📅 Probeplan: ' + importedProben + ' Termine';
         
         if (state.projektMeta.autor) {
           msg += '\n\n✍️ Autor: ' + state.projektMeta.autor;
@@ -10275,329 +9974,6 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       reader.readAsText(file);
     }
 
-    // ============================================
-    // GOOGLE DRIVE UI
-    // ============================================
-    let gdriveImportFiles = [];
-    let gdriveImportLoading = false;
-    let gdriveSaving = false;
-    let gdriveFolderSetup = false;
-    
-    function renderGdriveImportTab() {
-      if (!gdriveIsConnected()) {
-        return `
-          <div class="text-center py-6">
-            <div class="text-4xl mb-3">☁️</div>
-            <p class="text-sm text-gray-600 mb-4">Verbinde dich mit Google Drive, um Dateien direkt aus eurem geteilten Projektordner zu laden – kein Herunterladen und Hochladen nötig.</p>
-            <button class="btn btn-primary" onclick="gdriveSignIn()" style="background: #4285f4; border-color: #4285f4;">
-              <span style="font-weight: 500;">🔑 Mit Google anmelden</span>
-            </button>
-            <p class="text-xs text-gray-400 mt-3">Deine Daten bleiben in deinem eigenen Google Drive.</p>
-          </div>
-        `;
-      }
-      
-      // Connected
-      let html = `
-        <div class="flex items-center justify-between mb-3 p-2 bg-green-50 rounded-lg border border-green-200">
-          <div class="flex items-center gap-2">
-            <span class="text-green-600">✅</span>
-            <span class="text-sm text-green-800">${gdriveUser?.email || 'Verbunden'}</span>
-          </div>
-          <button class="text-xs text-gray-400 hover:text-red-500" onclick="gdriveSignOut()">Abmelden</button>
-        </div>
-      `;
-      
-      if (!gdriveFolderId) {
-        html += `
-          <div class="text-center py-4">
-            <p class="text-sm text-gray-600 mb-3">Wähle einen Projektordner auf Google Drive:</p>
-            <button class="btn btn-outline" onclick="gdriveShowFolderPicker()">📁 Ordner wählen / erstellen</button>
-          </div>
-        `;
-      } else {
-        html += `
-          <div class="flex items-center gap-2 mb-3 p-2 bg-blue-50 rounded border border-blue-200">
-            <span>📁</span>
-            <span class="text-sm text-blue-800 flex-1">${gdriveFolderName || 'Ordner'}</span>
-            <button class="text-xs text-blue-600 hover:text-blue-800" onclick="gdriveShowFolderPicker()">Ändern</button>
-          </div>
-        `;
-        
-        if (gdriveImportLoading) {
-          html += `<div class="text-center py-4"><div class="text-sm text-gray-500">⏳ Dateien werden geladen...</div></div>`;
-        } else if (gdriveImportFiles.length === 0) {
-          html += `
-            <div class="text-center py-4 text-gray-400">
-              <p class="text-sm">Keine JSON-Dateien in diesem Ordner gefunden.</p>
-              <button class="btn btn-outline btn-sm mt-2" onclick="gdriveRefreshFiles()">🔄 Aktualisieren</button>
-            </div>
-          `;
-        } else {
-          html += `
-            <div class="flex items-center justify-between mb-2">
-              <p class="text-xs text-gray-500">${gdriveImportFiles.length} Datei(en) gefunden</p>
-              <button class="text-xs text-blue-600 hover:text-blue-800" onclick="gdriveRefreshFiles()">🔄 Aktualisieren</button>
-            </div>
-            <div style="max-height: 250px; overflow-y: auto;" class="space-y-1">
-          `;
-          for (const file of gdriveImportFiles) {
-            const date = new Date(file.modifiedTime).toLocaleDateString('de-CH', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-            const isExchange = file.name.toLowerCase().includes('exchange');
-            const isBackup = file.name.toLowerCase().includes('backup');
-            const icon = isExchange ? '🔄' : isBackup ? '💾' : '📄';
-            const label = isExchange ? 'Exchange' : isBackup ? 'Backup' : 'JSON';
-            html += `
-              <div class="border rounded-lg p-2 hover:bg-blue-50 cursor-pointer flex items-center gap-2" onclick="gdriveImportFile('${file.id}', '${file.name.replace(/'/g, "\\'")}')">
-                <span>${icon}</span>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium truncate">${file.name}</p>
-                  <p class="text-xs text-gray-400">${date}</p>
-                </div>
-                <span class="text-xs px-2 py-0.5 rounded" style="background: ${isExchange ? '#f3e8ff' : '#ecfdf5'}; color: ${isExchange ? '#7c3aed' : '#059669'};">${label}</span>
-              </div>
-            `;
-          }
-          html += `</div>`;
-        }
-      }
-      
-      html += `
-        <div class="flex gap-2 mt-4">
-          <button class="btn btn-outline flex-1" onclick="closeModal('showImportModal')">Schliessen</button>
-        </div>
-      `;
-      return html;
-    }
-    
-    async function gdriveRefreshFiles() {
-      gdriveImportLoading = true;
-      render();
-      try {
-        gdriveImportFiles = await gdriveListFiles();
-      } catch (err) {
-        alert('❌ Fehler: ' + err.message);
-        gdriveImportFiles = [];
-      }
-      gdriveImportLoading = false;
-      render();
-      // Re-open the import modal and switch to drive tab
-      openModal('showImportModal');
-      setTimeout(() => showImportTab('gdrive'), 50);
-    }
-    
-    async function gdriveImportFile(fileId, fileName) {
-      try {
-        const data = await gdriveLoadFile(fileId);
-        
-        if (data.format === 'nina-exchange') {
-          // Exchange-Import – direkt verarbeiten
-          const details = [];
-          if (data.figures?.length) details.push(`${data.figures.length} Figuren`);
-          if (data.scenes?.length) details.push(`${data.scenes.length} Szenen`);
-          if (data.persons?.length) details.push(`${data.persons.length} Personen`);
-          if (data.rehearsals?.length) details.push(`${data.rehearsals.length} Proben`);
-          if (data.konzept) details.push('Konzept');
-          if (data.recherche?.length) details.push(`${data.recherche.length} Recherche`);
-          if (data.beziehungen?.length) details.push(`${data.beziehungen.length} Beziehungen`);
-          
-          const summary = details.join(', ');
-          if (confirm(`🔄 Exchange-Datei importieren?\n\n📄 ${fileName}\n📋 Inhalt: ${summary}\n\nDie Daten werden in dein aktuelles Projekt übernommen.`)) {
-            ninaImportData = data;
-            doImportNina();
-          }
-          
-        } else if (data.data && (data.data.figuren || data.data.projektName || data.data.felder)) {
-          // Backup-Import (hat data.data Struktur mit projektName/figuren/felder)
-          const d = data.data;
-          const details = [];
-          if (d.projektName) details.push(`Projekt: ${d.projektName}`);
-          if (d.figuren?.length) details.push(`${d.figuren.length} Figuren`);
-          if (d.felder?.length) details.push(`${d.felder.length} Szenen`);
-          if (d.cues?.length) details.push(`${d.cues.length} Cues`);
-          
-          const summary = details.join('\n');
-          if (confirm(`💾 Backup wiederherstellen?\n\n📄 ${fileName}\n${summary}\n\n⚠️ Dies überschreibt dein aktuelles Projekt komplett.`)) {
-            importFromDramera(data);
-            closeModal('showImportModal');
-            alert('✅ Backup erfolgreich wiederhergestellt!');
-          }
-          
-        } else {
-          alert('⚠️ Dateiformat nicht erkannt.\n\n📄 ' + fileName + '\n\nErwartet wird eine NiNA-Exchange- oder Backup-Datei.');
-        }
-      } catch (err) {
-        alert('❌ Fehler beim Laden: ' + err.message);
-      }
-    }
-    
-    function gdriveOnConnected() {
-      if (gdriveFolderId) {
-        gdriveRefreshFiles();
-      }
-    }
-    
-    async function gdriveShowFolderPicker() {
-      console.log('GDrive: Folder Picker geöffnet, Token:', !!gdriveToken);
-      
-      // Wenn nicht eingeloggt, erst Login triggern
-      if (!gdriveToken) {
-        console.log('GDrive: Kein Token, starte Login...');
-        // Nach Login soll Folder Picker automatisch öffnen
-        const origCallback = typeof gdriveOnConnected === 'function' ? gdriveOnConnected : null;
-        window.gdriveOnConnected = function() {
-          window.gdriveOnConnected = origCallback;
-          setTimeout(() => gdriveShowFolderPicker(), 300);
-        };
-        gdriveSignIn();
-        return;
-      }
-      
-      gdriveFolderSetup = true;
-      
-      try {
-        // Suche nach NiNA-Ordnern
-        let folders = [];
-        try {
-          folders = await gdriveListFolders();
-        } catch(e) {
-          console.warn('Keine NiNA-Ordner gefunden:', e);
-        }
-        
-        let html = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;" onclick="if(event.target===this) document.getElementById('gdrive-folder-modal').remove()">
-          <div style="background:white;border-radius:12px;padding:24px;max-width:450px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);" onclick="event.stopPropagation()">
-            <h3 style="font-size:18px;font-weight:600;margin-bottom:16px;">📁 Projektordner wählen</h3>
-        `;
-        
-        if (folders.length > 0) {
-          html += `<p style="font-size:13px;color:#6b7280;margin-bottom:12px;">Bestehende NiNA-Ordner:</p><div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px;">`;
-          for (const f of folders) {
-            html += `
-              <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;cursor:pointer;display:flex;align-items:center;gap:8px;" 
-                   onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='white'"
-                   onclick="gdriveSelectFolder('${f.id}', '${f.name.replace(/'/g, "\\'")}')">
-                <span>📁</span>
-                <span style="font-size:14px;flex:1;">${f.name}</span>
-              </div>
-            `;
-            // Sub-Ordner laden
-            try {
-              const subs = await gdriveListProjectFolders(f.id);
-              for (const sub of subs) {
-                html += `
-                  <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;cursor:pointer;display:flex;align-items:center;gap:8px;margin-left:24px;" 
-                       onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='white'"
-                       onclick="gdriveSelectFolder('${sub.id}', '${f.name} / ${sub.name.replace(/'/g, "\\'")}')">
-                    <span>📂</span>
-                    <span style="font-size:14px;flex:1;">${sub.name}</span>
-                  </div>
-                `;
-              }
-            } catch(e) { console.warn('Sub-Ordner Fehler:', e); }
-          }
-          html += `</div><hr style="margin:12px 0;">`;
-        }
-        
-        html += `
-            <p style="font-size:13px;color:#6b7280;margin-bottom:12px;">Neuen Ordner erstellen:</p>
-            <div style="display:flex;gap:8px;margin-bottom:8px;">
-              <input type="text" id="gdrive-new-folder" placeholder="z.B. NiNA Projekte" value="NiNA Projekte" style="flex:1;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">
-              <button onclick="gdriveCreateNewFolder()" style="padding:8px 16px;background:#4285f4;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;">Erstellen</button>
-            </div>
-            <p style="font-size:11px;color:#9ca3af;margin-bottom:16px;">Tipp: Erstelle zuerst "NiNA Projekte", dann darin Unterordner für jedes Projekt.</p>
-            <button onclick="document.getElementById('gdrive-folder-modal').remove()" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;background:white;font-size:14px;cursor:pointer;">Abbrechen</button>
-          </div>
-        </div>`;
-        
-        // Altes Modal entfernen falls vorhanden
-        const old = document.getElementById('gdrive-folder-modal');
-        if (old) old.remove();
-        
-        const modal = document.createElement('div');
-        modal.id = 'gdrive-folder-modal';
-        modal.innerHTML = html;
-        document.body.appendChild(modal);
-        
-      } catch (err) {
-        console.error('Folder picker error:', err);
-        alert('❌ Fehler beim Laden der Ordner: ' + err.message);
-      }
-      gdriveFolderSetup = false;
-    }
-    
-    async function gdriveSelectFolder(id, name) {
-      await gdriveSetFolder(id, name);
-      const modal = document.getElementById('gdrive-folder-modal');
-      if (modal) modal.remove();
-      gdriveRefreshFiles();
-    }
-    
-    async function gdriveCreateNewFolder() {
-      const nameInput = document.getElementById('gdrive-new-folder');
-      const name = nameInput?.value?.trim();
-      if (!name) { alert('Bitte einen Namen eingeben'); return; }
-      
-      try {
-        const folder = await gdriveCreateFolder(name);
-        await gdriveSetFolder(folder.id, name);
-        const modal = document.getElementById('gdrive-folder-modal');
-        if (modal) modal.remove();
-        alert('✅ Ordner "' + name + '" erstellt!');
-        gdriveRefreshFiles();
-      } catch (err) {
-        alert('❌ Fehler: ' + err.message);
-      }
-    }
-    
-    // ---- DRIVE EXPORT ----
-    async function gdriveSaveExchange() {
-      if (!gdriveIsConnected()) { gdriveSignIn(); return; }
-      if (!gdriveFolderId) { gdriveShowFolderPicker(); return; }
-      
-      gdriveSaving = true;
-      render();
-      
-      try {
-        const exchangeData = buildNinaExchangeData();
-        const projektName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜéèêàáâ\s\-_]/g, '').replace(/\s+/g, '_');
-        const now = new Date();
-        const ts = now.toISOString().slice(0, 10) + '_' + now.toTimeString().slice(0, 5).replace(':', '-');
-        const fileName = projektName + '_Rebu_Exchange_' + ts + '.json';
-        
-        await gdriveSaveFile(fileName, exchangeData);
-        alert('✅ Exchange-Datei gespeichert!\n\n📁 ' + gdriveFolderName + '\n📄 ' + fileName);
-      } catch (err) {
-        alert('❌ Speichern fehlgeschlagen: ' + err.message);
-      }
-      
-      gdriveSaving = false;
-      render();
-    }
-    
-    async function gdriveSaveBackup() {
-      if (!gdriveIsConnected()) { gdriveSignIn(); return; }
-      if (!gdriveFolderId) { gdriveShowFolderPicker(); return; }
-      
-      gdriveSaving = true;
-      render();
-      
-      try {
-        const backupData = exportToDramera();
-        const projektName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜéèêàáâ\s\-_]/g, '').replace(/\s+/g, '_');
-        const now = new Date();
-        const ts = now.toISOString().slice(0, 10) + '_' + now.toTimeString().slice(0, 5).replace(':', '-');
-        const fileName = projektName + '_Rebu_Backup_' + ts + '.json';
-        
-        await gdriveSaveFile(fileName, backupData);
-        alert('✅ Backup gespeichert!\n\n📁 ' + gdriveFolderName + '\n📄 ' + fileName);
-      } catch (err) {
-        alert('❌ Speichern fehlgeschlagen: ' + err.message);
-      }
-      
-      gdriveSaving = false;
-      render();
-    }
-    
     function renderExportModal() {
       const aktiveSzene = state.szenen.find(s => s.id === state.aktiveSzene);
       
@@ -10718,13 +10094,13 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
               ` : ''}
               
               <div class="space-y-2">
-                <p class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Sichern & Teilen</p>
+                <p class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Datenaustausch</p>
                 
                 <div class="border-2 border-green-400 rounded-lg p-3 bg-green-50 hover:bg-green-100 cursor-pointer" onclick="downloadDrameraExport()">
                   <div class="flex items-center gap-3">
                     <div class="flex-1">
-                      <p class="font-medium text-green-800 text-sm">💾 Backup auf dieses Gerät</p>
-                      <p class="text-xs text-green-700">Speichert dein ganzes Projekt als Datei auf deinem Computer. Damit kannst du es jederzeit wiederherstellen.</p>
+                      <p class="font-medium text-green-800 text-sm">Projekt-Backup (.json)</p>
+                      <p class="text-xs text-green-700">Vollständige Sicherung – kann wieder importiert werden</p>
                     </div>
                     <span class="px-2 py-0.5 bg-green-600 text-white text-xs font-bold rounded">SICHER</span>
                   </div>
@@ -10732,41 +10108,12 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
                 
                 <div class="border-2 rounded-lg p-3 hover:opacity-90 cursor-pointer" style="background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(168,113,89,0.15)); border-color: #a87159;" onclick="exportForDramera()">
                   <div class="flex items-center gap-3">
-                    <div class="flex-1">
-                      <p class="font-medium text-sm" style="color: #78350f;">🔄 Für Werkbank / Probeplan</p>
-                      <p class="text-xs" style="color: #92400e;">Erstellt eine Austausch-Datei, die dein Team in der Werkbank oder im Probeplan öffnen kann. Figuren, Szenen und Textbuch werden geteilt.</p>
+                    <div>
+                      <p class="font-medium text-sm" style="color: #78350f;">Für Dramera / Propla</p>
+                      <p class="text-xs" style="color: #92400e;">NINA-Exchange – für Werkbank & Probenplanung</p>
                     </div>
                   </div>
                 </div>
-              </div>
-              
-              <!-- Google Drive -->
-              <div class="border-2 border-blue-300 rounded-lg p-4 mt-3 mb-4" style="background: linear-gradient(135deg, rgba(66,133,244,0.05), rgba(52,168,83,0.05));">
-                <p class="text-xs font-bold text-blue-500 uppercase tracking-wide mb-2">☁️ Google Drive – Im Team teilen</p>
-                ${gdriveIsConnected() ? `
-                  <div class="flex items-center gap-2 mb-3 text-xs text-green-700">
-                    <span>✅ ${gdriveUser?.email || 'Verbunden'}</span>
-                    ${gdriveFolderName ? `<span class="text-gray-400">·</span> <span>📁 ${gdriveFolderName}</span>` : ''}
-                  </div>
-                  ${gdriveFolderId ? `
-                    <p class="text-xs text-gray-500 mb-2">Speichert direkt in euren geteilten Projektordner auf Google Drive – dein Team kann die Dateien dort sofort öffnen.</p>
-                    <div class="space-y-2">
-                      <button class="btn btn-sm w-full" style="background: #4285f4; color: white; border: none;" onclick="gdriveSaveExchange()" ${gdriveSaving ? 'disabled' : ''}>
-                        ${gdriveSaving ? '⏳ Speichern...' : '🔄 Austausch-Datei in Drive speichern'}
-                      </button>
-                      <button class="btn btn-sm btn-outline w-full text-xs" onclick="gdriveSaveBackup()" ${gdriveSaving ? 'disabled' : ''}>
-                        ${gdriveSaving ? '⏳ ...' : '💾 Backup in Drive speichern'}
-                      </button>
-                    </div>
-                  ` : `
-                    <button class="btn btn-sm btn-outline w-full" onclick="gdriveShowFolderPicker()">📁 Ordner wählen</button>
-                  `}
-                ` : `
-                  <p class="text-xs text-gray-500 mb-2">Verbinde dich mit Google Drive, um Dateien direkt in einen geteilten Projektordner zu speichern – ohne Dateien per Mail hin und her schicken.</p>
-                  <button class="btn btn-sm w-full" style="background: #4285f4; color: white; border: none;" onclick="gdriveShowFolderPicker()">
-                    🔑 Mit Google verbinden
-                  </button>
-                `}
               </div>
               
               <button class="btn btn-outline w-full mt-4" onclick="closeModal('showExportModal')">Schliessen</button>
@@ -10799,8 +10146,12 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     // TEXTFASSUNG EXPORT (Word & PDF)
     // ============================================
     
-    function generateTextfassungHTML(szenenFilter = null) {
-      const meta = state.projektMeta;
+    async function generateTextfassungHTML(szenenFilter = null) {
+      const meta = { ...state.projektMeta };
+      // Titelbild aus IndexedDB auflösen für Export
+      if (meta.titelbild && meta.titelbild.startsWith('idb:')) {
+        meta.titelbild = await resolveTitelbildForExport(meta.titelbild);
+      }
       const exportSzenen = szenenFilter || getExportSzenen();
       const eigeneGruppen = meta.eigeneGruppen || ['Erster Akt'];
       
@@ -11130,7 +10481,11 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     }
     
     async function exportDocx(includeCues) {
-      const meta = state.projektMeta;
+      const meta = { ...state.projektMeta };
+      // Titelbild aus IndexedDB auflösen für Export
+      if (meta.titelbild && meta.titelbild.startsWith('idb:')) {
+        meta.titelbild = await resolveTitelbildForExport(meta.titelbild);
+      }
       const exportSzenen = getExportSzenen();
       const istVollstaendig = exportSzenen.length === state.szenen.length;
       
@@ -11631,8 +10986,8 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       Array.from(temp.childNodes).forEach(function(node) { processTopLevel(node); });
     }
     
-    function exportTextfassungPDF() {
-      const html = generateTextfassungHTML();
+    async function exportTextfassungPDF() {
+      const html = await generateTextfassungHTML();
       
       // Neues Fenster für Druckvorschau
       const printWindow = window.open('', '_blank');
@@ -11653,7 +11008,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     // NINA-EXCHANGE EXPORT v2.0
     // Vollständiges Format für Werkbank, Rebu, Propla
     // ============================================
-    function buildNinaExchangeData() {
+    function exportForDramera() {
       // NINA-Exchange Format v2.0 erstellen
       const ninaExport = {
         format: 'nina-exchange',
@@ -11671,7 +11026,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
           tagline: state.projektMeta.tagline || '',
           logline: state.projektMeta.logline || '',
           copyright: state.projektMeta.copyright || '',
-          cover_image: state.projektMeta.titelbild || '',
+          cover_image: (state.projektMeta.titelbild && !state.projektMeta.titelbild.startsWith('idb:')) ? state.projektMeta.titelbild : '',
           premiere_date: state.projektMeta.premiere || null,
           venue: state.projektMeta.spielort || '',
           version_name: state.projektMeta.fassung || 'Arbeitsfassung',
@@ -11753,12 +11108,6 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
           scene_id: m.szeneId || null
         }))
       };
-      
-      return ninaExport;
-    }
-    
-    function exportForDramera() {
-      const ninaExport = buildNinaExchangeData();
       
       // Als JSON-Datei herunterladen
       const fileName = makeExportFilename('NINA-Exchange', 'json');
@@ -12678,6 +12027,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       if (modalName === 'showProjektModal') {
         editingProjekt = null;
         pendingTitelbild = null;
+        pendingTitelbildFile = null;
       }
       render();
     }
@@ -14309,10 +13659,8 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
         .replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '')
         .replace(/\s+/g, '_')
         .substring(0, 60);
-      const now = new Date();
-      const datum = now.toISOString().slice(0, 10); // JJJJ-MM-TT
-      const zeit = now.toTimeString().slice(0, 5).replace(':', '-'); // HH-MM
-      return `${name}_${typ}_${datum}_${zeit}.${ext}`;
+      const datum = new Date().toISOString().slice(0, 10); // JJJJ-MM-TT
+      return `${name}_${typ}_${datum}.${ext}`;
     }
     
     function downloadHTML(content, filename) {
@@ -14365,8 +13713,12 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       }
     }
     
-    function downloadDrameraExport() {
+    async function downloadDrameraExport() {
       const exportData = exportToDramera();
+      // Titelbild aus IndexedDB auflösen für Backup
+      if (exportData.data?.projektMeta?.titelbild?.startsWith('idb:')) {
+        exportData.data.projektMeta.titelbild = await resolveTitelbildForExport(exportData.data.projektMeta.titelbild);
+      }
       const json = JSON.stringify(exportData, null, 2);
       const filename = makeExportFilename('Backup', 'json');
       
