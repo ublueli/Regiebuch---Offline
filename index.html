@@ -8083,11 +8083,10 @@ WICHTIGE REGELN:
               <div id="import-tab-nina" style="display: none;">
                 <div style="background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(20,184,166,0.1)); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
                   <p style="font-size: 14px; color: #374151; margin-bottom: 8px;">
-                    <strong>🔄 Import aus Dramera Werkbank</strong>
+                    <strong>🔄 Daten aus Werkbank oder Probeplan übernehmen</strong>
                   </p>
                   <p style="font-size: 12px; color: #6b7280;">
-                    Importiere Figuren und Szenen, die du in Dramera entwickelt hast.
-                    Die Daten werden in dein aktuelles Projekt übernommen.
+                    Lade hier eine Austausch-Datei, die jemand aus der Werkbank oder dem Probeplan exportiert hat. Figuren, Szenen und weitere Daten werden in dein aktuelles Projekt übernommen.
                   </p>
                 </div>
                 
@@ -10289,7 +10288,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
         return `
           <div class="text-center py-6">
             <div class="text-4xl mb-3">☁️</div>
-            <p class="text-sm text-gray-600 mb-4">Mit Google Drive verbinden, um Exchange-Dateien direkt aus einem geteilten Projektordner zu laden.</p>
+            <p class="text-sm text-gray-600 mb-4">Verbinde dich mit Google Drive, um Dateien direkt aus eurem geteilten Projektordner zu laden – kein Herunterladen und Hochladen nötig.</p>
             <button class="btn btn-primary" onclick="gdriveSignIn()" style="background: #4285f4; border-color: #4285f4;">
               <span style="font-weight: 500;">🔑 Mit Google anmelden</span>
             </button>
@@ -10392,39 +10391,40 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
         const data = await gdriveLoadFile(fileId);
         
         if (data.format === 'nina-exchange') {
-          // Exchange-Import
-          pendingNinaImportData = data;
-          document.getElementById('import-nina-name').textContent = '✅ ' + fileName;
-          document.getElementById('import-nina-btn').disabled = false;
+          // Exchange-Import – direkt verarbeiten
+          const details = [];
+          if (data.figures?.length) details.push(`${data.figures.length} Figuren`);
+          if (data.scenes?.length) details.push(`${data.scenes.length} Szenen`);
+          if (data.persons?.length) details.push(`${data.persons.length} Personen`);
+          if (data.rehearsals?.length) details.push(`${data.rehearsals.length} Proben`);
+          if (data.konzept) details.push('Konzept');
+          if (data.recherche?.length) details.push(`${data.recherche.length} Recherche`);
+          if (data.beziehungen?.length) details.push(`${data.beziehungen.length} Beziehungen`);
           
-          // Preview anzeigen
-          let details = [];
-          if (data.figures?.length) details.push(`👤 ${data.figures.length} Figuren`);
-          if (data.scenes?.length) details.push(`🎬 ${data.scenes.length} Szenen`);
-          if (data.persons?.length) details.push(`👥 ${data.persons.length} Personen`);
-          if (data.rehearsals?.length) details.push(`📅 ${data.rehearsals.length} Proben`);
-          if (data.konzept) details.push('📋 Konzept');
-          if (data.recherche?.length) details.push(`🔍 ${data.recherche.length} Recherche`);
-          if (data.beziehungen?.length) details.push(`🔗 ${data.beziehungen.length} Beziehungen`);
+          const summary = details.join(', ');
+          if (confirm(`🔄 Exchange-Datei importieren?\n\n📄 ${fileName}\n📋 Inhalt: ${summary}\n\nDie Daten werden in dein aktuelles Projekt übernommen.`)) {
+            pendingNinaImportData = data;
+            doImportNina();
+          }
           
-          showImportTab('nina');
-          setTimeout(() => {
-            const previewEl = document.getElementById('import-nina-preview');
-            const detailsEl = document.getElementById('import-nina-details');
-            if (previewEl && detailsEl) {
-              previewEl.style.display = 'block';
-              detailsEl.innerHTML = details.join('<br>');
-            }
-          }, 50);
-        } else if (data.projektId || data.figuren) {
-          // Backup-Import – direkt verarbeiten
-          if (confirm(`💾 Backup "${fileName}" laden?\n\nDies überschreibt das aktuelle Projekt.`)) {
+        } else if (data.data && (data.data.figuren || data.data.projektName || data.data.felder)) {
+          // Backup-Import (hat data.data Struktur mit projektName/figuren/felder)
+          const d = data.data;
+          const details = [];
+          if (d.projektName) details.push(`Projekt: ${d.projektName}`);
+          if (d.figuren?.length) details.push(`${d.figuren.length} Figuren`);
+          if (d.felder?.length) details.push(`${d.felder.length} Szenen`);
+          if (d.cues?.length) details.push(`${d.cues.length} Cues`);
+          
+          const summary = details.join('\n');
+          if (confirm(`💾 Backup wiederherstellen?\n\n📄 ${fileName}\n${summary}\n\n⚠️ Dies überschreibt dein aktuelles Projekt komplett.`)) {
             importFromDramera(data);
             closeModal('showImportModal');
-            alert('✅ Backup erfolgreich geladen!');
+            alert('✅ Backup erfolgreich wiederhergestellt!');
           }
+          
         } else {
-          alert('⚠️ Unbekanntes Dateiformat: ' + fileName);
+          alert('⚠️ Dateiformat nicht erkannt.\n\n📄 ' + fileName + '\n\nErwartet wird eine NiNA-Exchange- oder Backup-Datei.');
         }
       } catch (err) {
         alert('❌ Fehler beim Laden: ' + err.message);
@@ -10714,13 +10714,13 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
               ` : ''}
               
               <div class="space-y-2">
-                <p class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Datenaustausch</p>
+                <p class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Sichern & Teilen</p>
                 
                 <div class="border-2 border-green-400 rounded-lg p-3 bg-green-50 hover:bg-green-100 cursor-pointer" onclick="downloadDrameraExport()">
                   <div class="flex items-center gap-3">
                     <div class="flex-1">
-                      <p class="font-medium text-green-800 text-sm">Projekt-Backup (.json)</p>
-                      <p class="text-xs text-green-700">Vollständige Sicherung – kann wieder importiert werden</p>
+                      <p class="font-medium text-green-800 text-sm">💾 Backup auf dieses Gerät</p>
+                      <p class="text-xs text-green-700">Speichert dein ganzes Projekt als Datei auf deinem Computer. Damit kannst du es jederzeit wiederherstellen.</p>
                     </div>
                     <span class="px-2 py-0.5 bg-green-600 text-white text-xs font-bold rounded">SICHER</span>
                   </div>
@@ -10728,26 +10728,27 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
                 
                 <div class="border-2 rounded-lg p-3 hover:opacity-90 cursor-pointer" style="background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(168,113,89,0.15)); border-color: #a87159;" onclick="exportForDramera()">
                   <div class="flex items-center gap-3">
-                    <div>
-                      <p class="font-medium text-sm" style="color: #78350f;">Für Dramera / Propla</p>
-                      <p class="text-xs" style="color: #92400e;">NINA-Exchange – für Werkbank & Probenplanung</p>
+                    <div class="flex-1">
+                      <p class="font-medium text-sm" style="color: #78350f;">🔄 Für Werkbank / Probeplan</p>
+                      <p class="text-xs" style="color: #92400e;">Erstellt eine Austausch-Datei, die dein Team in der Werkbank oder im Probeplan öffnen kann. Figuren, Szenen und Textbuch werden geteilt.</p>
                     </div>
                   </div>
                 </div>
               </div>
               
               <!-- Google Drive -->
-              <div class="border-2 border-blue-300 rounded-lg p-4 mb-4" style="background: linear-gradient(135deg, rgba(66,133,244,0.05), rgba(52,168,83,0.05));">
-                <p class="text-xs font-bold text-blue-500 uppercase tracking-wide mb-2">☁️ Google Drive</p>
+              <div class="border-2 border-blue-300 rounded-lg p-4 mt-3 mb-4" style="background: linear-gradient(135deg, rgba(66,133,244,0.05), rgba(52,168,83,0.05));">
+                <p class="text-xs font-bold text-blue-500 uppercase tracking-wide mb-2">☁️ Google Drive – Im Team teilen</p>
                 ${gdriveIsConnected() ? `
                   <div class="flex items-center gap-2 mb-3 text-xs text-green-700">
                     <span>✅ ${gdriveUser?.email || 'Verbunden'}</span>
                     ${gdriveFolderName ? `<span class="text-gray-400">·</span> <span>📁 ${gdriveFolderName}</span>` : ''}
                   </div>
                   ${gdriveFolderId ? `
+                    <p class="text-xs text-gray-500 mb-2">Speichert direkt in euren geteilten Projektordner auf Google Drive – dein Team kann die Dateien dort sofort öffnen.</p>
                     <div class="space-y-2">
                       <button class="btn btn-sm w-full" style="background: #4285f4; color: white; border: none;" onclick="gdriveSaveExchange()" ${gdriveSaving ? 'disabled' : ''}>
-                        ${gdriveSaving ? '⏳ Speichern...' : '☁️ Exchange in Drive speichern'}
+                        ${gdriveSaving ? '⏳ Speichern...' : '🔄 Austausch-Datei in Drive speichern'}
                       </button>
                       <button class="btn btn-sm btn-outline w-full text-xs" onclick="gdriveSaveBackup()" ${gdriveSaving ? 'disabled' : ''}>
                         ${gdriveSaving ? '⏳ ...' : '💾 Backup in Drive speichern'}
@@ -10757,9 +10758,9 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
                     <button class="btn btn-sm btn-outline w-full" onclick="gdriveShowFolderPicker()">📁 Ordner wählen</button>
                   `}
                 ` : `
-                  <p class="text-xs text-gray-500 mb-2">Exchange-Dateien direkt in einen geteilten Projektordner speichern.</p>
+                  <p class="text-xs text-gray-500 mb-2">Verbinde dich mit Google Drive, um Dateien direkt in einen geteilten Projektordner zu speichern – ohne Dateien per Mail hin und her schicken.</p>
                   <button class="btn btn-sm w-full" style="background: #4285f4; color: white; border: none;" onclick="gdriveShowFolderPicker()">
-                    🔑 Mit Google verbinden & Ordner wählen
+                    🔑 Mit Google verbinden
                   </button>
                 `}
               </div>
