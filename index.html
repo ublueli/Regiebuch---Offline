@@ -2818,6 +2818,14 @@ was morgen kommt – wer ist dabei?</p>
                     🔒 Der Key wird nur lokal im Browser gespeichert, nie übertragen.
                     <br><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" class="text-blue-500 hover:underline">→ API-Key erstellen</a>
                   </p>
+                  <div class="flex gap-2 mt-2">
+                    <button class="btn btn-xs btn-outline flex-1" onclick="exportApiKeyToFile()" ${!apiKey ? 'disabled' : ''} title="Key als Datei speichern — zum Wiederherstellen nach Browser-Reset">
+                      💾 Key sichern
+                    </button>
+                    <button class="btn btn-xs btn-outline flex-1" onclick="importApiKeyFromFile()" title="Key aus gesicherter Datei laden">
+                      📂 Key laden
+                    </button>
+                  </div>
                 </div>
               </div>
               
@@ -4349,6 +4357,38 @@ was morgen kommt – wer ist dabei?</p>
       } catch(e) { /* IndexedDB nicht verfügbar */ }
     }
     
+    // API-Key als Datei exportieren (zum sicheren Aufbewahren)
+    function exportApiKeyToFile() {
+      const key = getApiKey();
+      if (!key) return alert('Kein API-Key vorhanden.');
+      const blob = new Blob([key], { type: 'text/plain' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'regiebuch-api-key.txt';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+    
+    // API-Key aus Datei importieren
+    function importApiKeyFromFile() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.txt,.key';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const text = await file.text();
+        const key = text.trim();
+        if (key && key.startsWith('sk-')) {
+          saveApiKey(key);
+          render();
+        } else {
+          alert('Ungültige Key-Datei. Der Key sollte mit "sk-" beginnen.');
+        }
+      };
+      input.click();
+    }
+    
     // API-Key testen
     async function testApiKey() {
       const apiKey = getApiKey();
@@ -4697,12 +4737,16 @@ WICHTIGE REGELN:
             ${!hasApiKey ? `
               <div style="padding: 1.5rem; text-align: center;">
                 <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔑</div>
-                <p style="color: #6b7280; margin-bottom: 1rem; font-size: 13px;">API-Key eingeben, um den KI-Assistenten zu nutzen.</p>
+                <p style="color: #6b7280; margin-bottom: 1rem; font-size: 13px;">API-Key eingeben oder aus Datei laden.</p>
                 <input type="password" id="ki-quick-apikey" placeholder="sk-ant-..." 
                        style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; margin-bottom: 8px;">
-                <button class="btn btn-sm btn-primary" style="width: 100%;"
+                <button class="btn btn-sm btn-primary" style="width: 100%; margin-bottom: 6px;"
                         onclick="const v = document.getElementById('ki-quick-apikey').value.trim(); if(v) { saveApiKey(v); render(); }">
                   Key speichern
+                </button>
+                <button class="btn btn-sm btn-outline" style="width: 100%;"
+                        onclick="importApiKeyFromFile()">
+                  📂 Key aus Datei laden
                 </button>
                 <p style="color: #9ca3af; font-size: 11px; margin-top: 8px;">
                   Wird nur lokal auf diesem Gerät gespeichert.
@@ -6040,7 +6084,7 @@ WICHTIGE REGELN:
                         </div>
                       </div>
                       <div class="flex gap-1 flex-shrink-0">
-                        <button class="btn btn-xs btn-primary" onclick="event.stopPropagation(); state._cameFromSzenen = true; selectSzene('${s.id}'); navigateTo('textbuch');" title="Zum Dialogtext springen">
+                        <button class="btn btn-xs btn-primary" onclick="event.stopPropagation(); state._cameFromSzenen = true; selectSzene('${s.id}'); navigateTo('textbuch');" title="Zum Dialogtext springen" style="font-weight: 600;">
                           → Text
                         </button>
                         <button class="btn btn-xs btn-outline" onclick="event.stopPropagation(); editSzene('${s.id}')" title="Szene bearbeiten">
