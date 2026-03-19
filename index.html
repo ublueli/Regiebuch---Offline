@@ -8,6 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
   <!-- Supabase entfernt für Stand-alone Version -->
   <script>
     // PDF.js Worker konfigurieren
@@ -547,6 +548,115 @@
     .cue-inline-marker:hover { transform: scale(1.05); }
     
     /* ============================================ */
+    /* FLIESSTEXT-MODUS                            */
+    /* ============================================ */
+    .fliesstext-container {
+      max-width: 56rem;
+      margin: 0 auto;
+    }
+    .fliesstext-szene {
+      position: relative;
+    }
+    .fliesstext-szene-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.5rem 3rem;
+      background: linear-gradient(90deg, #f0f4ff 0%, transparent 100%);
+      border-top: 2px solid #cbd5e1;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .fliesstext-szene:first-child .fliesstext-szene-header {
+      border-top: none;
+    }
+    .fliesstext-szene-header:hover {
+      background: linear-gradient(90deg, #dbeafe 0%, transparent 100%);
+    }
+    .fliesstext-szene-header .szene-nr {
+      font-weight: 700;
+      font-size: 0.8rem;
+      color: #3b82f6;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 4px;
+      padding: 1px 8px;
+      white-space: nowrap;
+    }
+    .fliesstext-szene-header .szene-titel {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #374151;
+    }
+    .fliesstext-szene-header .szene-meta {
+      font-size: 0.7rem;
+      color: #9ca3af;
+      margin-left: auto;
+    }
+    .fliesstext-szene-header.aktiv {
+      background: linear-gradient(90deg, #dbeafe 0%, #eff6ff 100%);
+      border-left: 3px solid #3b82f6;
+    }
+    .fliesstext-editor {
+      padding: 1.5rem 3rem;
+      min-height: 60px;
+      outline: none;
+      font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+      font-size: 12pt;
+      line-height: 1.45;
+      color: #212121;
+      border-left: 3px solid transparent;
+      transition: border-color 0.15s;
+    }
+    .fliesstext-editor:focus {
+      border-left-color: #3b82f6;
+      background: #fefefe;
+    }
+    .fliesstext-editor:empty:before {
+      content: 'Hier schreiben...';
+      color: #d1d5db;
+      font-style: italic;
+    }
+    /* Dieselben Formatvorlagen wie im normalen Editor */
+    .fliesstext-editor * {
+      font-family: inherit !important;
+      font-size: inherit !important;
+      line-height: inherit !important;
+      background: transparent !important;
+    }
+    .fliesstext-editor *:not([class*="format-"]):not(.figur-name):not(.dialog-text):not(.cue-marker):not(.cue-badge) {
+      color: inherit !important;
+    }
+    .fliesstext-editor strong, .fliesstext-editor b { font-weight: bold !important; }
+    .fliesstext-editor em, .fliesstext-editor i { font-style: italic !important; }
+    .fliesstext-editor u { text-decoration: underline !important; }
+    
+    /* Toggle-Button Styling */
+    .modus-toggle {
+      display: inline-flex;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      overflow: hidden;
+      font-size: 0.75rem;
+    }
+    .modus-toggle button {
+      padding: 3px 10px;
+      border: none;
+      background: white;
+      color: #6b7280;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-size: 0.7rem;
+      white-space: nowrap;
+    }
+    .modus-toggle button:hover { background: #f3f4f6; }
+    .modus-toggle button.active {
+      background: #3b82f6;
+      color: white;
+    }
+    
+    /* ============================================ */
     /* TOOLBAR                                      */
     /* ============================================ */
     .toolbar { 
@@ -1053,12 +1163,14 @@
     const save = (key, data) => {
       try {
         localStorage.setItem(key, JSON.stringify(data));
+        return true;
       } catch(e) {
         if (e.name === 'QuotaExceededError') {
           console.error('⚠️ localStorage voll! Key:', key, 'Grösse:', JSON.stringify(data).length);
-          alert('⚠️ Speicher voll!\n\nDer lokale Speicher ist erschöpft. Bitte exportiere ein Backup und lösche ungenutzte Projekte.\n\nTipp: Grosse Bilder werden jetzt automatisch in einer separaten Datenbank gespeichert.');
+          return false; // Fehler melden, NICHT alert() — Aufrufer entscheidet
         } else {
-          throw e;
+          console.error('localStorage Fehler:', e);
+          return false;
         }
       }
     };
@@ -1074,6 +1186,23 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+    };
+    
+    // HTML-Sanitizing für importierte Inhalte (XSS-Schutz)
+    const sanitizeHtml = (html) => {
+      if (!html) return '';
+      if (typeof DOMPurify !== 'undefined') {
+        return DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: ['p', 'div', 'span', 'strong', 'b', 'em', 'i', 'u', 's', 'br', 'mark',
+                         'table', 'thead', 'tbody', 'tr', 'td', 'th', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+          ALLOWED_ATTR: ['class', 'style', 'id', 'data-cue-id', 'data-format', 'title', 'contenteditable'],
+          FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'link'],
+          FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur']
+        });
+      }
+      // Fallback ohne DOMPurify: Script-Tags entfernen
+      return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                 .replace(/on\w+\s*=/gi, 'data-blocked=');
     };
     
     // v1.2: Datum MIT Uhrzeit formatieren
@@ -1170,7 +1299,7 @@
         request.onsuccess = () => {
           if (request.result) {
             const blob = new Blob([request.result.data], { type: request.result.type });
-            const url = URL.createObjectURL(blob);
+            const url = createTrackedObjectURL(blob);
             resolve({ url, data: request.result });
           } else {
             resolve(null);
@@ -1243,6 +1372,29 @@
     // BILD-SPEICHERUNG (für Kostüme/Masken)
     // ============================================
     
+    // ObjectURL-Registry: Verhindert Speicherlecks bei langen Sitzungen
+    const _activeObjectURLs = new Set();
+    
+    function createTrackedObjectURL(blob) {
+      const url = URL.createObjectURL(blob);
+      _activeObjectURLs.add(url);
+      return url;
+    }
+    
+    function revokeTrackedObjectURL(url) {
+      if (url && _activeObjectURLs.has(url)) {
+        URL.revokeObjectURL(url);
+        _activeObjectURLs.delete(url);
+      }
+    }
+    
+    function revokeAllTrackedObjectURLs() {
+      _activeObjectURLs.forEach(url => {
+        try { URL.revokeObjectURL(url); } catch(e) {}
+      });
+      _activeObjectURLs.clear();
+    }
+    
     // Bild in IndexedDB speichern
     async function saveImageToDB(imageId, file) {
       if (!mediaBD) await initAudioDB();
@@ -1286,7 +1438,7 @@
         request.onsuccess = () => {
           if (request.result) {
             const blob = new Blob([request.result.data], { type: request.result.type });
-            const url = URL.createObjectURL(blob);
+            const url = createTrackedObjectURL(blob);
             resolve({ url, data: request.result });
           } else {
             resolve(null);
@@ -1541,6 +1693,7 @@
       selectedFormat: 'dialog',
       // v1.4: Textansicht (schauspieler, technik, aenderungen)
       textAnsicht: 'technik',
+      textbuchModus: 'szene', // 'szene' = einzelne Szene, 'fliesstext' = alle Szenen fliessend
       szenenListeOpen: true,
       detailsPanelOpen: true,
       showHelpModal: false,
@@ -2487,6 +2640,19 @@ was morgen kommt – wer ist dabei?</p>
     }
     
     // Szenen nach Gruppe und Nummer sortieren
+    // Szenen-Nummern korrekt vergleichen: "2.10" kommt nach "2.9", nicht nach "2.1"
+    function compareSzenenNummer(nummerA, nummerB) {
+      const partsA = String(nummerA || '0').split('.');
+      const partsB = String(nummerB || '0').split('.');
+      const maxLen = Math.max(partsA.length, partsB.length);
+      for (let i = 0; i < maxLen; i++) {
+        const a = parseInt(partsA[i]) || 0;
+        const b = parseInt(partsB[i]) || 0;
+        if (a !== b) return a - b;
+      }
+      return 0;
+    }
+    
     function sortSzenen() {
       state.szenen.sort((a, b) => {
         // Erst nach Gruppe sortieren
@@ -2494,55 +2660,102 @@ was morgen kommt – wer ist dabei?</p>
         const gruppeB = parseInt(b.gruppe) || 1;
         if (gruppeA !== gruppeB) return gruppeA - gruppeB;
         
-        // Dann nach Nummer sortieren
-        const nummerA = parseFloat(a.nummer) || 0;
-        const nummerB = parseFloat(b.nummer) || 0;
-        return nummerA - nummerB;
+        // Dann nach Nummer sortieren (korrekt: 2.10 nach 2.9)
+        return compareSzenenNummer(a.nummer, b.nummer);
       });
     }
 
     function saveProjektDaten() {
-      if (!state.projektId) return;
+      if (!state.projektId) return false;
       
       state.dirty = true; // Änderungen seit letztem Export
       
-      save(KEYS.projektMeta(state.projektId), state.projektMeta);
-      save(KEYS.figuren(state.projektId), state.figuren);
-      save(KEYS.szenen(state.projektId), state.szenen);
-      save(KEYS.textbuch(state.projektId), state.textbuch);
-      save(KEYS.cues(state.projektId), state.cues);
-      save(KEYS.fassungen(state.projektId), state.fassungen);
-      save(KEYS.requisiten(state.projektId), state.requisiten);
-      save(KEYS.kostueme(state.projektId), state.kostueme);
-      save(KEYS.medien(state.projektId), state.medien);
-      save(KEYS.buehne(state.projektId), state.buehne);
-      // v3.0
-      save(KEYS.konzept(state.projektId), state.konzept);
-      save(KEYS.beziehungen(state.projektId), state.beziehungen);
-      save(KEYS.rechercheMaterial(state.projektId), state.rechercheMaterial);
-      save(KEYS.musikkonzept(state.projektId), state.musikkonzept);
-      save(KEYS.ensemble(state.projektId), state.ensemble);
-      save(KEYS.team(state.projektId), state.team);
-      save(KEYS.probeplan(state.projektId), state.probeplan);
+      // Alle Saves sammeln und Fehler zählen
+      const results = [
+        save(KEYS.projektMeta(state.projektId), state.projektMeta),
+        save(KEYS.figuren(state.projektId), state.figuren),
+        save(KEYS.szenen(state.projektId), state.szenen),
+        save(KEYS.textbuch(state.projektId), state.textbuch),
+        save(KEYS.cues(state.projektId), state.cues),
+        save(KEYS.fassungen(state.projektId), state.fassungen),
+        save(KEYS.requisiten(state.projektId), state.requisiten),
+        save(KEYS.kostueme(state.projektId), state.kostueme),
+        save(KEYS.medien(state.projektId), state.medien),
+        save(KEYS.buehne(state.projektId), state.buehne),
+        // v3.0
+        save(KEYS.konzept(state.projektId), state.konzept),
+        save(KEYS.beziehungen(state.projektId), state.beziehungen),
+        save(KEYS.rechercheMaterial(state.projektId), state.rechercheMaterial),
+        save(KEYS.musikkonzept(state.projektId), state.musikkonzept),
+        save(KEYS.ensemble(state.projektId), state.ensemble),
+        save(KEYS.team(state.projektId), state.team),
+        save(KEYS.probeplan(state.projektId), state.probeplan),
+      ];
       
-      // Autosave-Indikator
-      showAutosaveIndicator();
+      const failCount = results.filter(r => !r).length;
+      const allOk = failCount === 0;
+      
+      // Autosave-Indikator — ehrliches Feedback
+      showAutosaveIndicator(allOk);
+      
+      if (!allOk) {
+        console.error(`⚠️ ${failCount} von ${results.length} Speichervorgängen fehlgeschlagen!`);
+        // Nur einmal warnen, nicht bei jedem Keystroke
+        if (!state._lastStorageWarning || Date.now() - state._lastStorageWarning > 30000) {
+          state._lastStorageWarning = Date.now();
+          alert('⚠️ Speicher voll!\n\n' + failCount + ' Datenbereiche konnten NICHT gespeichert werden.\n\n' +
+                'Bitte SOFORT ein Backup exportieren (💾 Sichern unter) und ungenutzte Projekte löschen!\n\n' +
+                'WICHTIG: Ohne Backup droht Datenverlust!');
+        }
+      }
       
       // v2.2: Auto-Sync zur Cloud (wenn Cloud-Projekt)
       scheduleSyncToCloud();
+      
+      return allOk;
+    }
+    
+    // Debounced Version für Editor-Input (verhindert 17× localStorage pro Sekunde)
+    let _saveToStorageTimer = null;
+    function debouncedSaveProjektDaten() {
+      if (_saveToStorageTimer) clearTimeout(_saveToStorageTimer);
+      _saveToStorageTimer = setTimeout(() => {
+        saveProjektDaten();
+        _saveToStorageTimer = null;
+      }, 800);
+    }
+    
+    // Sofortiges Speichern erzwingen (z.B. vor Export, vor Szenenwechsel)
+    function flushPendingSave() {
+      if (_saveToStorageTimer) {
+        clearTimeout(_saveToStorageTimer);
+        _saveToStorageTimer = null;
+        saveProjektDaten();
+      }
     }
     
     let autosaveTimeout = null;
-    function showAutosaveIndicator() {
+    function showAutosaveIndicator(success = true) {
       const el = document.getElementById('autosave-indicator');
       if (!el) return;
       const now = new Date();
       const time = now.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
-      el.textContent = '✓ ' + time;
-      el.style.color = '#16a34a';
+      
+      if (success) {
+        el.textContent = '✓ ' + time;
+        el.style.color = '#16a34a';
+      } else {
+        el.textContent = '⚠ FEHLER ' + time;
+        el.style.color = '#dc2626';
+        el.style.fontWeight = 'bold';
+      }
+      
       if (autosaveTimeout) clearTimeout(autosaveTimeout);
       autosaveTimeout = setTimeout(() => {
-        if (el) el.style.color = '#9ca3af';
+        if (el) {
+          el.style.color = success ? '#9ca3af' : '#dc2626'; // Fehler bleibt rot sichtbar
+          el.style.fontWeight = 'normal';
+        }
       }, 3000);
     }
     
@@ -2554,7 +2767,9 @@ was morgen kommt – wer ist dabei?</p>
     function wechsleProjekt(projektId) {
       if (projektId === state.projektId) return;
       
-      // Aktuelles Projekt speichern
+      // WICHTIG: Aktuellen Editor-Inhalt sichern, dann alles speichern
+      saveCurrentText(true);
+      flushPendingSave();
       saveProjektDaten();
       
       // Alle Modals schliessen
@@ -3054,7 +3269,7 @@ was morgen kommt – wer ist dabei?</p>
       const neueProjekte = projekte.filter(p => p.id !== projektId);
       save(KEYS.projekte, neueProjekte);
       
-      // Projekt-Daten löschen (optional, localStorage Keys bleiben, aber sind verwaist)
+      // Projekt-Daten VOLLSTÄNDIG löschen (inkl. v3.0 Keys)
       localStorage.removeItem(KEYS.projektMeta(projektId));
       localStorage.removeItem(KEYS.figuren(projektId));
       localStorage.removeItem(KEYS.szenen(projektId));
@@ -3065,6 +3280,38 @@ was morgen kommt – wer ist dabei?</p>
       localStorage.removeItem(KEYS.kostueme(projektId));
       localStorage.removeItem(KEYS.medien(projektId));
       localStorage.removeItem(KEYS.buehne(projektId));
+      // v3.0 Keys — bisher fehlten diese!
+      localStorage.removeItem(KEYS.konzept(projektId));
+      localStorage.removeItem(KEYS.beziehungen(projektId));
+      localStorage.removeItem(KEYS.rechercheMaterial(projektId));
+      localStorage.removeItem(KEYS.musikkonzept(projektId));
+      localStorage.removeItem(KEYS.ensemble(projektId));
+      localStorage.removeItem(KEYS.team(projektId));
+      localStorage.removeItem(KEYS.probeplan(projektId));
+      
+      // IndexedDB-Medien zum Projekt aufräumen
+      try {
+        if (mediaBD) {
+          const stores = [AUDIO_STORE_NAME, IMAGE_STORE_NAME];
+          stores.forEach(storeName => {
+            try {
+              const tx = mediaBD.transaction(storeName, 'readwrite');
+              const store = tx.objectStore(storeName);
+              const req = store.openCursor();
+              req.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                  // Keys die mit der ProjektId zusammenhängen löschen
+                  if (cursor.key && String(cursor.key).includes(projektId)) {
+                    cursor.delete();
+                  }
+                  cursor.continue();
+                }
+              };
+            } catch(e) { console.warn('IndexedDB Store Cleanup Fehler:', e); }
+          });
+        }
+      } catch(e) { console.warn('IndexedDB Cleanup Fehler:', e); }
       
       // Zu anderem Projekt wechseln (defensiv: nur wenn neueProjekte nicht leer)
       if (state.projektId === projektId && neueProjekte.length) {
@@ -3155,7 +3402,7 @@ was morgen kommt – wer ist dabei?</p>
             
             d.felder.forEach(f => {
               if (f.inhalt) {
-                state.textbuch[f.id] = f.inhalt;
+                state.textbuch[f.id] = sanitizeHtml(f.inhalt);
               }
             });
             
@@ -3186,7 +3433,17 @@ was morgen kommt – wer ist dabei?</p>
           
           // Fassungen
           if (d.fassungen && d.fassungen.length > 0) {
-            state.fassungen = d.fassungen;
+            state.fassungen = d.fassungen.map(f => {
+              // Textbuch in Fassungen sanitizen
+              if (f.textbuch) {
+                const sanitized = {};
+                Object.keys(f.textbuch).forEach(key => {
+                  sanitized[key] = sanitizeHtml(f.textbuch[key]);
+                });
+                f.textbuch = sanitized;
+              }
+              return f;
+            });
             // Referenz auf letzte Fassung setzen (für Änderungsverfolgung)
             if (!state.referenzFassungId && state.fassungen.length > 0) {
               state.referenzFassungId = state.fassungen[state.fassungen.length - 1].id;
@@ -3230,6 +3487,26 @@ was morgen kommt – wer ist dabei?</p>
     }
 
     function exportToDramera() {
+      // Sicherheitsnetz: Editor-Inhalt in state übernehmen (falls Aufrufer es vergessen hat)
+      if (state.textbuchModus === 'fliesstext') {
+        const editors = document.querySelectorAll('.fliesstext-editor[data-szene-id]');
+        editors.forEach(ed => {
+          const szeneId = ed.dataset.szeneId;
+          if (szeneId) {
+            let content = stripCueMarkers(ed.innerHTML);
+            content = stripInlineRegie(content);
+            state.textbuch[szeneId] = content;
+          }
+        });
+      } else {
+        const editor = document.getElementById('text-editor');
+        if (editor && state.aktiveSzene) {
+          let content = stripCueMarkers(editor.innerHTML);
+          content = stripInlineRegie(content);
+          state.textbuch[state.aktiveSzene] = content;
+        }
+      }
+      
       return {
         version: '3.0',
         exportDate: new Date().toISOString(),
@@ -3301,6 +3578,7 @@ was morgen kommt – wer ist dabei?</p>
     // FASSUNGS-VERWALTUNG (v1.2: mit Uhrzeit)
     // ============================================
     function neueFassungSpeichern(name) {
+      saveCurrentText(true); // WICHTIG: Aktuellen Editor-Inhalt sichern
       const now = new Date();
       const fassung = {
         id: genId(),
@@ -3322,6 +3600,10 @@ was morgen kommt – wer ist dabei?</p>
     function fassungLaden(fassungId) {
       const fassung = state.fassungen.find(f => f.id === fassungId);
       if (fassung) {
+        // Aktuellen Stand sichern bevor wir überschreiben
+        saveCurrentText(true);
+        flushPendingSave();
+        
         if (!confirm(`Aktuelle Änderungen werden überschrieben.\n\nFassung "${fassung.name}" laden?`)) return;
         
         state.textbuch = JSON.parse(JSON.stringify(fassung.textbuch));
@@ -3451,7 +3733,7 @@ was morgen kommt – wer ist dabei?</p>
         : targetState.content;
       
       editor.innerHTML = wrapInlineRegie(displayContent);
-      saveProjektDaten();
+      debouncedSaveProjektDaten();
       updateUndoButtons();
     }
     
@@ -3490,7 +3772,7 @@ was morgen kommt – wer ist dabei?</p>
         : targetState.content;
       
       editor.innerHTML = wrapInlineRegie(displayContent);
-      saveProjektDaten();
+      debouncedSaveProjektDaten();
       updateUndoButtons();
     }
     
@@ -4186,6 +4468,26 @@ was morgen kommt – wer ist dabei?</p>
       render();
     }
     
+    // Kombinierter Handler für Dropdown (Modus + Ansicht)
+    function setAnsichtUndModus(value) {
+      // Value ist z.B. "szene-technik" oder "fliesstext-schauspieler"
+      const parts = value.split('-');
+      const modus = parts[0]; // 'szene' oder 'fliesstext'
+      const ansicht = parts[1]; // 'technik', 'schauspieler', 'aenderungen'
+      
+      // Erst aktuellen Inhalt sichern
+      if (state.textbuchModus === 'fliesstext') {
+        saveAllFliesstextEditors();
+      } else if (state.textAnsicht !== 'aenderungen') {
+        saveCurrentText(true);
+      }
+      flushPendingSave();
+      
+      state.textbuchModus = modus;
+      state.textAnsicht = ansicht;
+      render();
+    }
+    
     // NEU: Editor-Klassen basierend auf Ansicht
     function getEditorClasses() {
       const classes = ['editor-content'];
@@ -4205,6 +4507,164 @@ was morgen kommt – wer ist dabei?</p>
       }
       
       return classes.join(' ');
+    }
+    
+    // ============================================
+    // FLIESSTEXT-MODUS
+    // ============================================
+    
+    // Szenen-Editor HTML (ausgelagert wegen Template-Literal-Verschachtelung)
+    function renderSzeneEditor(displayContent, diffResult) {
+      if (state.textAnsicht === 'aenderungen') {
+        const refFassung = getReferenzFassung();
+        if (!refFassung) {
+          return `
+            <div class="editor-content" style="padding: 20px;">
+              <div class="diff-no-ref">
+                <p style="font-size:24px; margin-bottom:8px;">📋</p>
+                <p><strong>Keine Referenz-Fassung vorhanden</strong></p>
+                <p style="margin-top:8px;">Speichere eine Fassung im Fassungen-Modul (📚 in der Navigation), um Änderungen automatisch nachzuverfolgen.</p>
+              </div>
+            </div>`;
+        }
+        
+        let infoHtml = `<div class="diff-info-bar">
+          <span>📋 Vergleich mit:</span>
+          <select onchange="setReferenzFassung(this.value)" style="max-width:200px;">
+            ${state.fassungen.map(f => {
+              const d = new Date(f.datum).toLocaleDateString('de-CH', { day:'2-digit', month:'2-digit', year:'numeric' });
+              return '<option value="' + f.id + '"' + (f.id === refFassung.id ? ' selected' : '') + '>' + f.name + ' (' + d + ')</option>';
+            }).join('')}
+          </select>`;
+        
+        if (diffResult && (diffResult.delCount > 0 || diffResult.insCount > 0)) {
+          infoHtml += `<span class="diff-stats"><span class="del-count">-${diffResult.delCount} gestrichen</span> · <span class="ins-count">+${diffResult.insCount} neu</span></span>`;
+        }
+        infoHtml += `</div>`;
+        
+        let bodyHtml = '';
+        if (diffResult && (diffResult.delCount > 0 || diffResult.insCount > 0)) {
+          bodyHtml = diffResult.html;
+        } else {
+          bodyHtml = '<div class="diff-no-changes"><p style="font-size:24px; margin-bottom:8px;">✅</p><p><strong>Keine Änderungen</strong></p><p style="margin-top:6px;">Der Text dieser Szene ist identisch mit der Referenz-Fassung.</p></div>';
+        }
+        
+        return `<div class="editor-content diff-view" style="padding: 20px;">${infoHtml}${bodyHtml}</div>`;
+      }
+      
+      // Normaler Editor (Technik / Schauspieler)
+      return `<div id="text-editor" 
+                   class="editor-content ${getEditorClasses()}"
+                   contenteditable="true"
+                   spellcheck="true">${displayContent}</div>`;
+    }
+    
+    function setTextbuchModus(modus) {
+      // Aktuellen Editor-Inhalt sichern vor dem Umschalten
+      if (state.textbuchModus === 'fliesstext') {
+        saveAllFliesstextEditors();
+      } else {
+        saveCurrentText(true);
+      }
+      state.textbuchModus = modus;
+      render();
+    }
+    
+    function setAktiveSzeneInFliesstext(szeneId) {
+      if (state.aktiveSzene === szeneId) return;
+      state.aktiveSzene = szeneId;
+      // Nur Header-Highlights aktualisieren (kein volles render!)
+      document.querySelectorAll('.fliesstext-szene-header').forEach(h => {
+        h.classList.toggle('aktiv', h.parentElement.dataset.szeneId === szeneId);
+      });
+      // Details-Panel aktualisieren (rechte Seite)
+      updateDetailsPanel();
+    }
+    
+    // Details-Panel im Fliesstext-Modus aktualisieren ohne volles re-render
+    function updateDetailsPanel() {
+      const panel = document.querySelector('.details-panel');
+      if (!panel) return;
+      const szene = state.szenen.find(s => s.id === state.aktiveSzene);
+      if (!szene) return;
+      // Nur die Szene-Nr und Titel in den Inputs aktualisieren
+      const nrInput = panel.querySelector('input[onchange*="nummer"]');
+      const titelInput = panel.querySelector('input[onchange*="titel"]');
+      if (nrInput) nrInput.value = szene.nummer;
+      if (titelInput) titelInput.value = szene.titel;
+    }
+    
+    // Alle Fliesstext-Editoren speichern
+    function saveAllFliesstextEditors() {
+      const editors = document.querySelectorAll('.fliesstext-editor[data-szene-id]');
+      editors.forEach(editor => {
+        const szeneId = editor.dataset.szeneId;
+        if (szeneId) {
+          let content = stripCueMarkers(editor.innerHTML);
+          content = stripInlineRegie(content);
+          state.textbuch[szeneId] = content;
+        }
+      });
+      debouncedSaveProjektDaten();
+    }
+    
+    // Fliesstext-Editoren Event-Listener registrieren (nach render())
+    function initFliesstextEditors() {
+      const editors = document.querySelectorAll('.fliesstext-editor[data-szene-id]');
+      editors.forEach(editor => {
+        const szeneId = editor.dataset.szeneId;
+        
+        // Standard-Absatztrenner
+        try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch(e) {}
+        
+        editor.addEventListener('input', () => {
+          // Nur diese eine Szene im State aktualisieren
+          let content = stripCueMarkers(editor.innerHTML);
+          content = stripInlineRegie(content);
+          state.textbuch[szeneId] = content;
+          debouncedSaveProjektDaten();
+        });
+        
+        editor.addEventListener('focus', () => {
+          setAktiveSzeneInFliesstext(szeneId);
+        });
+        
+        editor.addEventListener('blur', () => {
+          let content = stripCueMarkers(editor.innerHTML);
+          content = stripInlineRegie(content);
+          state.textbuch[szeneId] = content;
+          saveProjektDaten();
+        });
+        
+        // Paste: Bereinigung
+        editor.addEventListener('paste', (e) => {
+          // Einfache Text-Paste Bereinigung
+        });
+        
+        // Enter-Handling
+        editor.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            const selection = window.getSelection();
+            if (!selection.rangeCount) return;
+            
+            // Neuen Absatz einfügen
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+            const newP = document.createElement('p');
+            newP.classList.add('format-standard');
+            newP.innerHTML = '<br>';
+            range.insertNode(newP);
+            
+            // Cursor hinter neuen Absatz setzen
+            const newRange = document.createRange();
+            newRange.setStartAfter(newP);
+            newRange.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(newRange);
+          }
+        });
+      });
     }
 
     function execCommand(cmd, value = null) {
@@ -4364,14 +4824,41 @@ was morgen kommt – wer ist dabei?</p>
       return enrichedText;
     }
 
-    function saveCurrentText() {
+    function saveCurrentText(immediate = false) {
+      // Fliesstext-Modus: Alle Editoren speichern
+      if (state.textbuchModus === 'fliesstext') {
+        const editors = document.querySelectorAll('.fliesstext-editor[data-szene-id]');
+        if (editors.length > 0) {
+          editors.forEach(editor => {
+            const szeneId = editor.dataset.szeneId;
+            if (szeneId) {
+              let content = stripCueMarkers(editor.innerHTML);
+              content = stripInlineRegie(content);
+              state.textbuch[szeneId] = content;
+            }
+          });
+          if (immediate) {
+            saveProjektDaten();
+          } else {
+            debouncedSaveProjektDaten();
+          }
+          return;
+        }
+      }
+      
+      // Szenen-Modus: Einzelnen Editor speichern
       const editor = document.getElementById('text-editor');
       if (editor && state.aktiveSzene) {
         // Cue-Marker und inline-regie Spans entfernen vor dem Speichern
         let content = stripCueMarkers(editor.innerHTML);
         content = stripInlineRegie(content);
         state.textbuch[state.aktiveSzene] = content;
-        saveProjektDaten();
+        // State ist jetzt aktuell — localStorage verzögert (Performance)
+        if (immediate) {
+          saveProjektDaten(); // Sofort (z.B. vor Export/Szenenwechsel)
+        } else {
+          debouncedSaveProjektDaten(); // Verzögert (normales Tippen)
+        }
       }
     }
     
@@ -4657,6 +5144,10 @@ was morgen kommt – wer ist dabei?</p>
     
     // v2.0: Warnung beim Schließen (nur für lokale Projekte)
     window.addEventListener('beforeunload', function(e) {
+      // WICHTIG: Ausstehende Saves sofort ausführen beim Verlassen
+      saveCurrentText(true);
+      flushPendingSave();
+      
       const hatDaten = state.szenen?.length > 0 || state.figuren?.length > 0;
       
       // Nur warnen wenn: Daten vorhanden UND nicht kürzlich exportiert
@@ -5215,7 +5706,7 @@ WICHTIGE REGELN:
           debouncedPushUndo(); // Undo-Snapshot nach Tipp-Pause
           scheduleInlineRegie(); // Inline-Regie live formatieren
         });
-        editor.addEventListener('blur', () => { saveCurrentText(); applyInlineRegieToEditor(); });
+        editor.addEventListener('blur', () => { saveCurrentText(true); applyInlineRegieToEditor(); });
         
         // Browser-Undo für diesen Editor deaktivieren (wir verwenden eigenes)
         editor.addEventListener('beforeinput', (e) => {
@@ -5361,6 +5852,11 @@ WICHTIGE REGELN:
       // Bottom-Player wiederherstellen wenn etwas spielt
       if (state.currentlyPlaying && state.currentView === 'textbuch') {
         requestAnimationFrame(() => updateBottomPlayer());
+      }
+      
+      // FLIESSTEXT-MODUS: Editoren initialisieren
+      if (state.textbuchModus === 'fliesstext' && state.currentView === 'textbuch') {
+        requestAnimationFrame(() => initFliesstextEditors());
       }
       
       // Post-render: idb:-Titelbilder asynchron laden
@@ -5931,11 +6427,14 @@ WICHTIGE REGELN:
               <div class="toolbar-divider"></div>
               ` : `<span style="font-size:12px; color:#6b7280;">Nur-Lese-Ansicht – Änderungen werden automatisch erkannt</span><div style="flex:1;"></div>`}
               
-              <!-- Ansicht-Auswahl -->
-              <select class="format-select" style="width: auto; min-width: 140px;" onchange="setTextAnsicht(this.value)">
-                <option value="technik" ${state.textAnsicht === 'technik' ? 'selected' : ''}>Technik</option>
-                <option value="schauspieler" ${state.textAnsicht === 'schauspieler' ? 'selected' : ''}>Schauspieler</option>
-                <option value="aenderungen" ${state.textAnsicht === 'aenderungen' ? 'selected' : ''}>Änderungen</option>
+              <!-- Ansicht-Auswahl (kombiniert Modus + Ansicht) -->
+              <select class="format-select" style="width: auto; min-width: 185px;" onchange="setAnsichtUndModus(this.value)">
+                <option value="szene-technik" ${state.textbuchModus === 'szene' && state.textAnsicht === 'technik' ? 'selected' : ''}>📄 Szene · Technik</option>
+                <option value="szene-schauspieler" ${state.textbuchModus === 'szene' && state.textAnsicht === 'schauspieler' ? 'selected' : ''}>📄 Szene · Schauspieler</option>
+                <option value="szene-aenderungen" ${state.textbuchModus === 'szene' && state.textAnsicht === 'aenderungen' ? 'selected' : ''}>📄 Szene · Änderungen</option>
+                <option disabled>──────────</option>
+                <option value="fliesstext-technik" ${state.textbuchModus === 'fliesstext' && state.textAnsicht === 'technik' ? 'selected' : ''}>📜 Fliesstext · Technik</option>
+                <option value="fliesstext-schauspieler" ${state.textbuchModus === 'fliesstext' && state.textAnsicht === 'schauspieler' ? 'selected' : ''}>📜 Fliesstext · Schauspieler</option>
               </select>
               
               ${state.textAnsicht !== 'aenderungen' ? `
@@ -5954,53 +6453,38 @@ WICHTIGE REGELN:
             </div>
             
             <!-- Editor -->
-            <div class="flex-1 overflow-y-auto p-4 bg-gray-100">
-              <div class="editor-container max-w-4xl mx-auto shadow-lg">
-                ${state.textAnsicht === 'aenderungen' ? (() => {
-                  // Diff-Ansicht (read-only)
-                  const refFassung = getReferenzFassung();
-                  if (!refFassung) {
-                    return `
-                      <div class="editor-content" style="padding: 20px;">
-                        <div class="diff-no-ref">
-                          <p style="font-size:24px; margin-bottom:8px;">📋</p>
-                          <p><strong>Keine Referenz-Fassung vorhanden</strong></p>
-                          <p style="margin-top:8px;">Speichere eine Fassung im Fassungen-Modul (📚 in der Navigation), um Änderungen automatisch nachzuverfolgen.</p>
-                        </div>
-                      </div>`;
-                  }
-                  
-                  const refDate = new Date(refFassung.datum).toLocaleDateString('de-CH', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-                  
-                  let infoHtml = `<div class="diff-info-bar">
-                    <span>📋 Vergleich mit:</span>
-                    <select onchange="setReferenzFassung(this.value)" style="max-width:200px;">
-                      ${state.fassungen.map(f => {
-                        const d = new Date(f.datum).toLocaleDateString('de-CH', { day:'2-digit', month:'2-digit', year:'numeric' });
-                        return '<option value="' + f.id + '"' + (f.id === refFassung.id ? ' selected' : '') + '>' + f.name + ' (' + d + ')</option>';
-                      }).join('')}
-                    </select>`;
-                  
-                  if (diffResult && (diffResult.delCount > 0 || diffResult.insCount > 0)) {
-                    infoHtml += `<span class="diff-stats"><span class="del-count">-${diffResult.delCount} gestrichen</span> · <span class="ins-count">+${diffResult.insCount} neu</span></span>`;
-                  }
-                  infoHtml += `</div>`;
-                  
-                  let bodyHtml = '';
-                  if (diffResult && (diffResult.delCount > 0 || diffResult.insCount > 0)) {
-                    bodyHtml = diffResult.html;
-                  } else {
-                    bodyHtml = '<div class="diff-no-changes"><p style="font-size:24px; margin-bottom:8px;">✅</p><p><strong>Keine Änderungen</strong></p><p style="margin-top:6px;">Der Text dieser Szene ist identisch mit der Referenz-Fassung.</p></div>';
-                  }
-                  
-                  return `<div class="editor-content diff-view" style="padding: 20px;">${infoHtml}${bodyHtml}</div>`;
-                })() : `
-                <div id="text-editor" 
-                     class="editor-content ${getEditorClasses()}"
-                     contenteditable="true"
-                     spellcheck="true">${displayContent}</div>
-                `}
+            <div class="flex-1 overflow-y-auto p-4 bg-gray-100" id="editor-scroll-area">
+              ${state.textbuchModus === 'fliesstext' && state.textAnsicht !== 'aenderungen' ? `
+              <!-- FLIESSTEXT-MODUS: Alle Szenen fliessend -->
+              <div class="editor-container max-w-4xl mx-auto shadow-lg fliesstext-container">
+                ${state.szenen.map((s, idx) => {
+                  const sContent = state.textbuch[s.id] || '';
+                  const sCues = state.cues.filter(c => c.szeneId === s.id);
+                  let sDisplay = state.textAnsicht === 'technik' ? enrichTextWithCueMarkers(sContent, sCues) : sContent;
+                  sDisplay = wrapInlineRegie(sDisplay);
+                  const figurenNames = s.figuren?.map(fId => state.figuren.find(f => f.id === fId)?.name).filter(Boolean).join(', ') || '';
+                  const isAktiv = s.id === state.aktiveSzene;
+                  return `
+                    <div class="fliesstext-szene" data-szene-id="${s.id}">
+                      <div class="fliesstext-szene-header ${isAktiv ? 'aktiv' : ''}" onclick="setAktiveSzeneInFliesstext('${s.id}')">
+                        <span class="szene-nr">${s.nummer}</span>
+                        <span class="szene-titel">${escapeHtml(s.titel)}</span>
+                        <span class="szene-meta">${escapeHtml(s.ort || '')}${s.ort && s.zeit ? ' · ' : ''}${escapeHtml(s.zeit || '')}${figurenNames ? ' · ' + escapeHtml(figurenNames) : ''}</span>
+                      </div>
+                      <div class="fliesstext-editor ${getEditorClasses()}"
+                           contenteditable="true"
+                           spellcheck="true"
+                           data-szene-id="${s.id}"
+                           onfocus="setAktiveSzeneInFliesstext('${s.id}')">${sDisplay}</div>
+                    </div>`;
+                }).join('')}
               </div>
+              ` : `
+              <!-- SZENEN-MODUS: Einzelne Szene -->
+              <div class="editor-container max-w-4xl mx-auto shadow-lg">
+                ${renderSzeneEditor(displayContent, diffResult)}
+              </div>
+              `}
             </div>
           </div>
           
@@ -6207,7 +6691,7 @@ WICHTIGE REGELN:
       if (sortierteGruppen.length === 0) return '';
       
       return sortierteGruppen.map(gruppenName => {
-        const szenen = gruppen[gruppenName];
+        const szenen = gruppen[gruppenName].sort((a, b) => compareSzenenNummer(a.nummer, b.nummer));
         
         return `
           <div class="card overflow-hidden">
@@ -13271,13 +13755,17 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     // ACTION HANDLERS
     // ============================================
     function navigateTo(view) {
-      // Vor dem View-Wechsel aktuellen Text speichern
-      saveCurrentText();
+      // Vor dem View-Wechsel aktuellen Text SOFORT speichern
+      saveCurrentText(true);
+      flushPendingSave();
       state.currentView = view;
       render();
     }
 
     function selectSzene(szeneId) {
+      // WICHTIG: Aktuellen Editor-Inhalt der bisherigen Szene sichern
+      saveCurrentText(true);
+      
       // Suchen-Bar schliessen bei Szenenwechsel
       const searchBar = document.getElementById('search-replace-bar');
       if (searchBar) { searchBar.remove(); searchReplaceVisible = false; }
@@ -14006,7 +14494,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
         const gruppe = aktuelleSzene.gruppe || '1';
         const szenenInGruppe = state.szenen
           .filter(s => s.gruppe === gruppe)
-          .sort((a, b) => parseFloat(a.nummer) - parseFloat(b.nummer));
+          .sort((a, b) => compareSzenenNummer(a.nummer, b.nummer));
         
         // Höchste Szenen-Nummer in dieser Gruppe finden
         let maxSubNummer = 0;
@@ -15223,7 +15711,9 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     let savedFileHandle = null;
     
     async function sichernProjekt(callback) {
-      saveProjektDaten(); // Erst mal lokal sichern
+      saveCurrentText(true); // WICHTIG: Aktuellen Editor-Inhalt in state übernehmen
+      flushPendingSave(); // Ausstehende debounced Saves sofort ausführen
+      saveProjektDaten(); // Alles lokal sichern
       
       const exportData = exportToDramera();
       // Titelbild aus IndexedDB auflösen für Backup
@@ -15409,6 +15899,8 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     }
     
     async function downloadDrameraExport() {
+      saveCurrentText(true); // WICHTIG: Aktuellen Editor-Inhalt in state übernehmen
+      flushPendingSave();
       const exportData = exportToDramera();
       // Titelbild aus IndexedDB auflösen für Backup
       if (exportData.data?.projektMeta?.titelbild?.startsWith('idb:')) {
@@ -15434,6 +15926,8 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     }
     
     async function sichernUnter() {
+      saveCurrentText(true); // WICHTIG: Aktuellen Editor-Inhalt in state übernehmen
+      flushPendingSave();
       saveProjektDaten();
       
       const exportData = exportToDramera();
@@ -15526,8 +16020,28 @@ const NINA_LOGO_BASE64 = '';
       // Format-Indikator bei Cursor-Bewegung aktualisieren
       document.addEventListener('selectionchange', updateFormatIndicator);
       
+      // WICHTIG: Bei Tab-Wechsel sofort speichern (verhindert Datenverlust)
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          saveCurrentText(true);
+          flushPendingSave();
+        }
+      });
+      
       // Globaler Keyboard-Shortcut: ? für Hilfe
       document.addEventListener('keydown', (e) => {
+        // Ctrl/Cmd+S: Sofort speichern
+        if ((e.ctrlKey || e.metaKey) && e.key === 's' && !e.shiftKey) {
+          e.preventDefault();
+          sichernProjekt();
+          return;
+        }
+        // Ctrl/Cmd+Shift+S: Sichern unter
+        if ((e.ctrlKey || e.metaKey) && e.key === 's' && e.shiftKey) {
+          e.preventDefault();
+          sichernUnter();
+          return;
+        }
         // ? öffnet Hilfe, aber nur wenn kein Input/Editor fokussiert
         if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
           const tag = document.activeElement?.tagName;
