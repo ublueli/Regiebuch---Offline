@@ -162,6 +162,14 @@
     .api-status.error { background: #fee2e2; color: #991b1b; }
     .api-status.neutral { background: #f3f4f6; color: #6b7280; }
 
+    /* Twin System - Dramera Button */
+    .dramera-twin-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; border: 1.5px solid #a87159; background: linear-gradient(135deg, rgba(168,113,89,0.12), rgba(139,92,246,0.08)); font-size: 12px; font-weight: 600; cursor: pointer; color: #78350f; transition: all 0.2s; position: relative; }
+    .dramera-twin-btn:hover { background: linear-gradient(135deg, #a87159, #8b5cf6); color: white; border-color: #92400e; }
+    .dramera-twin-btn .sync-dot { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid white; }
+    .dramera-twin-btn .sync-dot.fresh { background: #10b981; }
+    .dramera-twin-btn .sync-dot.stale { background: #f59e0b; }
+    .dramera-twin-btn .sync-dot.none { display: none; }
+
     /* Sidebar */
     .sidebar { background: linear-gradient(180deg, #1e3a5f 0%, #0f172a 100%); }
     .nav-section { color: #60a5fa; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
@@ -1736,6 +1744,8 @@
       kiLoading: false,
       // v2.0: Cloud
       showCloudModal: false,
+      // v4.0: Twin System (Rebu ↔ Dramera)
+      showTwinModal: false,
     };
     
     // KI State (außerhalb von state wegen localStorage)
@@ -1750,6 +1760,447 @@
     function getUrlProjectId() {
       const params = new URLSearchParams(window.location.search);
       return params.get('project');
+    }
+
+    // ============================================
+    // TWIN SYSTEM: REBU ↔ DRAMERA BRIDGE
+    // ============================================
+    const DRAMERA_URL = 'https://ublueli.github.io/Dramera-Offline/';
+    const TWIN_BRIDGE_KEY = 'nina-twin-bridge';
+    const TWIN_SYNC_KEY = 'nina-twin-last-sync';
+    const TWIN_DIR_KEY = 'nina-twin-last-direction';
+
+    // Sync-Status aus localStorage lesen
+    function getTwinSyncStatus() {
+      try {
+        const ts = localStorage.getItem(TWIN_SYNC_KEY);
+        return ts ? { lastSync: ts, direction: localStorage.getItem(TWIN_DIR_KEY) || 'unknown' } : null;
+      } catch { return null; }
+    }
+
+    // Sync-Status-Text
+    function getTwinSyncText() {
+      const syncStatus = getTwinSyncStatus();
+      if (!syncStatus?.lastSync) return '';
+      try {
+        const d = new Date(syncStatus.lastSync);
+        const now = new Date();
+        const diffMs = now - d;
+        const diffMin = Math.floor(diffMs / 60000);
+        const diffH = Math.floor(diffMs / 3600000);
+        const diffD = Math.floor(diffMs / 86400000);
+
+        let timeStr;
+        if (diffMin < 1) timeStr = 'gerade eben';
+        else if (diffMin < 60) timeStr = 'vor ' + diffMin + ' Min.';
+        else if (diffH < 24) timeStr = 'vor ' + diffH + ' Std.';
+        else timeStr = 'vor ' + diffD + ' Tag' + (diffD > 1 ? 'en' : '');
+
+        const dir = syncStatus.direction === 'rebu-to-dramera' ? 'an Dramera' :
+                     syncStatus.direction === 'dramera-to-rebu' ? 'von Dramera' : '';
+        return timeStr + ' ' + dir;
+      } catch { return ''; }
+    }
+
+    function getTwinSyncDotClass() {
+      const syncStatus = getTwinSyncStatus();
+      if (!syncStatus?.lastSync) return 'none';
+      const diffMs = new Date() - new Date(syncStatus.lastSync);
+      if (diffMs < 3600000) return 'fresh';
+      return 'stale';
+    }
+
+    // NINA-Exchange v4.0 erstellen (erweitert mit Rebu-spezifischen Daten)
+    function createNinaExchangeV4() {
+      return {
+        format: 'nina-exchange',
+        version: '4.0',
+        exportedFrom: 'rebu',
+        exportedAt: new Date().toISOString(),
+        includes_contacts: false,
+
+        // Twin-System Metadaten
+        twin: {
+          source_app: 'rebu',
+          source_url: window.location.href,
+          transfer_method: 'bridge',
+          project_id: state.projektMeta.titel || 'unbenannt'
+        },
+
+        project: {
+          name: state.projektMeta.titel || 'Unbenannt',
+          subtitle: state.projektMeta.untertitel || '',
+          author: state.projektMeta.autor || '',
+          director: state.projektMeta.regie || '',
+          description: state.projektMeta.logline || '',
+          tagline: state.projektMeta.tagline || '',
+          logline: state.projektMeta.logline || '',
+          copyright: state.projektMeta.copyright || '',
+          cover_image: (state.projektMeta.titelbild && !state.projektMeta.titelbild.startsWith('idb:')) ? state.projektMeta.titelbild : '',
+          premiere_date: state.projektMeta.premiere || null,
+          venue: state.projektMeta.spielort || '',
+          version_name: state.projektMeta.fassung || 'Arbeitsfassung',
+          version_date: state.projektMeta.fassungsDatum || new Date().toISOString(),
+          structure_type: state.projektMeta.strukturTyp || 'akte',
+          status: 'active'
+        },
+
+        figures: state.figuren.map((f, idx) => ({
+          id: f._exchangeId || f.id,
+          name: f.name || '',
+          short_name: f.kuerzel || f.name?.substring(0, 3).toUpperCase() || '',
+          description: f.beschreibung || '',
+          figure_type: f.typ || 'main',
+          color: f.farbe || '#3b82f6',
+          sort_order: idx,
+          want_external: f.want || '',
+          want_internal: f.wantInternal || '',
+          need: f.need || '',
+          ghost: f.ghost || '',
+          biography: f.biografie || f.beschreibung || '',
+          weakness: f.schwaeche || '',
+          strength: f.staerke || '',
+          characteristic: f.charakteristik || '',
+          archetype: f.archetyp || '',
+          profession: f.beruf || '',
+          goal: f.ziel || '',
+          obstacle: f.hindernis || '',
+          conflict: f.konflikt || '',
+          development: f.entwicklung || '',
+          relationships: [],
+          _source: 'rebu'
+        })),
+
+        scenes: state.szenen.map((s, idx) => {
+          const rawContent = state.textbuch[s.id] || '';
+          const figurenIds = (s.figuren || []).map(fId => {
+            const fig = state.figuren.find(f => f.id === fId);
+            return fig ? (fig._exchangeId || fig.id) : fId;
+          });
+          // Cues für diese Szene sammeln
+          const sceneCues = state.cues.filter(c => c.szeneId === s.id).map(c => ({
+            id: c.id, typ: c.typ, nummer: c.nummer, beschreibung: c.beschreibung || ''
+          }));
+
+          return {
+            id: s._exchangeId || s.id,
+            number: s.nummer || String(idx + 1),
+            name: s.titel || 'Szene ' + (idx + 1),
+            act: s.gruppe || '',
+            group: s.gruppe || '',
+            description: s.zusammenfassung || '',
+            summary: s.zusammenfassung || '',
+            location: s.ort || '',
+            time: s.zeit || '',
+            figures: figurenIds,
+            themes: [],
+            conflict: '',
+            turning_point: '',
+            notes: '',
+            content: rawContent,
+            estimated_duration: s.dauer || null,
+            status: 'written',
+            sort_order: idx,
+            // v4.0: Rebu-spezifische Felder
+            rehearsal_notes: s.bemerkungen || '',
+            blocking_notes: s.blocking || '',
+            cue_references: sceneCues,
+            _source: 'rebu'
+          };
+        }),
+
+        scene_ideas: [],
+        themes: [],
+
+        // Konzept (aus Rebu-Konzept-Modul)
+        konzept: {
+          treatment: (state.konzept?.treatment || []).length > 0 ? JSON.stringify(state.konzept.treatment) : '',
+          fundament: {
+            kern: state.konzept?.fundament?.kern || '',
+            logline: state.konzept?.fundament?.logline || state.projektMeta?.logline || '',
+            unaussprechliches: state.konzept?.fundament?.unaussprechliches || '',
+            emotionaler_bogen: state.konzept?.fundament?.emotionalerBogen || '',
+            konflikt: state.konzept?.fundament?.konflikt || ''
+          },
+          werte: state.konzept?.werte ? [{
+            virtue_a: state.konzept.werte.virtue_a || '',
+            virtue_b: state.konzept.werte.virtue_b || '',
+            excess_a: state.konzept.werte.excess_a || '',
+            excess_b: state.konzept.werte.excess_b || '',
+            zuordnung: state.konzept.werte.zuordnung || {}
+          }] : [],
+          motive: (state.konzept?.motive || []).map(m => ({
+            id: m.id, text: m.text || '', beschreibung: m.beschreibung || ''
+          }))
+        },
+
+        recherche: (state.rechercheMaterial || []).map(item => ({
+          id: item.id, type: item.type || 'text', title: item.title || '',
+          content: item.content || '', url: item.url || '', source: item.source || '',
+          note: item.note || '', tags: item.tags || [], used: item.used || false,
+          createdAt: item.createdAt || ''
+        })),
+
+        musikkonzept: {
+          konzept_text: state.musikkonzept?.konzept || '',
+          stueckliste: (state.musikkonzept?.stuecke || []).map(m => ({
+            id: m.id, titel: m.titel || '', typ: m.typ || '',
+            beschreibung: m.beschreibung || '', einsatz: m.einsatz || ''
+          }))
+        },
+
+        beziehungen: (state.beziehungen || []).map(bez => ({
+          figur1_id: bez.figur1, figur2_id: bez.figur2,
+          figur1_name: (state.figuren.find(f => f.id === bez.figur1) || {}).name || bez.figur1,
+          figur2_name: (state.figuren.find(f => f.id === bez.figur2) || {}).name || bez.figur2,
+          type: bez.typ || '', description: bez.beschreibung || '', details: bez.details || ''
+        })),
+
+        spannungskurve: [],
+        eckpfeiler: [],
+        kommentare: [],
+
+        // v4.0: Rebu-spezifische Blöcke (mit echten Daten)
+        cues: state.cues.map(c => ({
+          id: c.id, scene_id: c.szeneId, cue_type: c.typ,
+          cue_number: c.nummer, description: c.beschreibung || '',
+          anchor_text: c.ankerText || '', duration: c.dauer || '',
+          sort_order: c.sortOrder || 0
+        })),
+
+        rehearsals: (state.probeplan || []).map(p => ({
+          id: p.id || genId(), date: p.datum || '',
+          start_time: (p.zeit || '').split('–')[0]?.trim() || '',
+          end_time: (p.zeit || '').split('–')[1]?.trim() || '',
+          location: p.ort || '', rehearsal_type: p.typ || '',
+          notes: p.notizen || '',
+          scene_ids: (p.szeneIds || []).map(sId => {
+            const sz = state.szenen.find(s => s.id === sId);
+            return sz ? (sz._exchangeId || sz.id) : sId;
+          })
+        })),
+
+        costumes: (state.kostueme || []).map(k => ({
+          id: k.id, name: k.name || '', figur_id: k.figur || '',
+          beschreibung: k.beschreibung || '', maske: k.maske || '',
+          szenen: k.szenen || [], notizen: k.notizen || ''
+        })),
+
+        props: (state.requisiten || []).map(r => ({
+          id: r.id, name: r.name || '', beschreibung: r.beschreibung || '',
+          szenen: r.szenen || [], besorgt: r.besorgt || false,
+          notizen: r.notizen || ''
+        })),
+
+        stage_plans: (state.buehne || []).map(b => ({
+          id: b.id, name: b.name || b.titel || '',
+          beschreibung: b.beschreibung || '', szenen: b.szenen || []
+        })),
+
+        castings: (state.ensemble || []).flatMap(p =>
+          (p.rolleIds || []).map(fId => {
+            const fig = state.figuren.find(f => f.id === fId);
+            return { person_id: p.id, figure_id: fig ? (fig._exchangeId || fig.id) : fId, casting_type: 'main' };
+          })
+        ),
+
+        ensemble: (state.ensemble || []).map(p => ({
+          id: p.id, name: p.name || '', role: 'Schauspiel',
+          notes: p.notizen || '', email: p.email || '', phone: p.telefon || ''
+        })),
+
+        team: (state.team || []).map(p => ({
+          id: p.id, name: p.name || '', function: p.funktion || '',
+          notes: p.notizen || '', email: p.email || '', phone: p.telefon || ''
+        }))
+      };
+    }
+
+    // Download-Hilfsfunktion
+    function twinDownloadFile(content, filename) {
+      const BOM = '\uFEFF';
+      const blob = new Blob([BOM + content], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // Transfer-Methode 1: localStorage Bridge
+    function twinTransferViaLocalStorage() {
+      try {
+        const exchangeData = createNinaExchangeV4();
+        exchangeData.twin.transfer_method = 'localstorage';
+
+        localStorage.setItem(TWIN_BRIDGE_KEY, JSON.stringify(exchangeData));
+        localStorage.setItem(TWIN_SYNC_KEY, new Date().toISOString());
+        localStorage.setItem(TWIN_DIR_KEY, 'rebu-to-dramera');
+
+        closeModal('showTwinModal');
+        window.open(DRAMERA_URL + '?twin=import&source=rebu', '_blank');
+      } catch (e) {
+        console.error('Twin Bridge Fehler:', e);
+        alert('Fehler beim Transfer: ' + e.message + '\n\nVersuche stattdessen den Datei-Download.');
+      }
+    }
+
+    // Transfer-Methode 2: Datei-Download
+    function twinTransferViaFile() {
+      const exchangeData = createNinaExchangeV4();
+      exchangeData.twin.transfer_method = 'file';
+
+      const safeName = (state.projektMeta.titel || 'projekt').replace(/[^a-zA-Z0-9äöüÄÖÜß]/g, '_');
+      const ts = new Date().toISOString().slice(0, 10);
+      const fileName = safeName + '_Twin_' + ts + '.nina.json';
+      twinDownloadFile(JSON.stringify(exchangeData, null, 2), fileName);
+
+      localStorage.setItem(TWIN_SYNC_KEY, new Date().toISOString());
+      localStorage.setItem(TWIN_DIR_KEY, 'rebu-to-dramera');
+      closeModal('showTwinModal');
+    }
+
+    // Transfer-Methode 3: URL-Parameter
+    function twinTransferViaURL() {
+      const exchangeData = createNinaExchangeV4();
+      exchangeData.twin.transfer_method = 'url';
+
+      try {
+        const jsonStr = JSON.stringify(exchangeData);
+        if (jsonStr.length > 32000) {
+          alert('Das Projekt ist zu gross für den URL-Transfer (' + Math.round(jsonStr.length / 1024) + ' KB).\n\nBitte nutze stattdessen den direkten Transfer oder den Datei-Download.');
+          return;
+        }
+
+        const encoded = btoa(unescape(encodeURIComponent(jsonStr)));
+        const url = DRAMERA_URL + '?twin=import&source=rebu&data=' + encodeURIComponent(encoded);
+
+        localStorage.setItem(TWIN_SYNC_KEY, new Date().toISOString());
+        localStorage.setItem(TWIN_DIR_KEY, 'rebu-to-dramera');
+        closeModal('showTwinModal');
+
+        window.open(url, '_blank');
+      } catch (e) {
+        alert('URL-Transfer fehlgeschlagen: ' + e.message + '\n\nBitte nutze den Datei-Download.');
+      }
+    }
+
+    // Twin-Import: Daten von Dramera empfangen
+    function twinCheckForIncoming() {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('twin') === 'import' && urlParams.get('source') === 'dramera') {
+          // Daten aus URL?
+          const urlData = urlParams.get('data');
+          if (urlData) {
+            try {
+              const decoded = decodeURIComponent(escape(atob(urlData)));
+              const importData = JSON.parse(decoded);
+              if (importData.format === 'nina-exchange') {
+                window.history.replaceState({}, '', window.location.pathname);
+                return importData;
+              }
+            } catch (e) { console.warn('URL-Daten ungültig:', e); }
+          }
+
+          // Daten aus localStorage Bridge?
+          const bridgeData = localStorage.getItem(TWIN_BRIDGE_KEY);
+          if (bridgeData) {
+            try {
+              const importData = JSON.parse(bridgeData);
+              if (importData.format === 'nina-exchange' && importData.exportedFrom === 'werkbank') {
+                window.history.replaceState({}, '', window.location.pathname);
+                return importData;
+              }
+            } catch (e) { console.warn('Bridge-Daten ungültig:', e); }
+          }
+        }
+        return null;
+      } catch { return null; }
+    }
+
+    // Twin-Import durchführen (nutzt bestehende importFromDramera-Logik)
+    async function twinProcessIncoming(importData) {
+      const source = importData.exportedFrom === 'werkbank' ? 'Dramera' : importData.exportedFrom;
+      const figurenCount = (importData.figures || []).length;
+      const szenenCount = (importData.scenes || []).length;
+
+      const accept = confirm(
+        'Daten von ' + source + ' empfangen!\n\n' +
+        figurenCount + ' Figuren, ' + szenenCount + ' Szenen\n' +
+        'Format: NINA-Exchange v' + (importData.version || '?') + '\n\n' +
+        'Sollen die Daten importiert werden?\n' +
+        '(Bestehende Felder werden NICHT überschrieben)'
+      );
+
+      if (accept) {
+        await importFromDramera(importData);
+
+        localStorage.setItem(TWIN_SYNC_KEY, new Date().toISOString());
+        localStorage.setItem(TWIN_DIR_KEY, 'dramera-to-rebu');
+
+        // Bridge-Daten bereinigen
+        localStorage.removeItem(TWIN_BRIDGE_KEY);
+
+        render();
+      }
+    }
+
+    // Twin-Modal rendern
+    function renderTwinModal() {
+      const syncText = getTwinSyncText();
+      const szenenMitText = state.szenen.filter(s => (state.textbuch[s.id] || '').trim().length > 0).length;
+
+      return '\
+        <div class="modal-overlay" onclick="closeModal(\'showTwinModal\')">\
+          <div class="modal-content" style="max-width: 520px; max-height: 85vh; overflow-y: auto;" onclick="event.stopPropagation()">\
+            <div class="modal-header">\
+              <h2 class="text-lg font-semibold">📐 In Dramera öffnen</h2>\
+              <button class="text-gray-400 hover:text-gray-600" onclick="closeModal(\'showTwinModal\')">✕</button>\
+            </div>\
+            <div class="modal-body">\
+              <p style="font-size: 13px; color: #6b7280; margin-bottom: 16px; line-height: 1.5;">\
+                Übertrage dein Projekt an <strong>Dramera</strong> (Werkbank) zur dramaturgischen Weiterarbeit.\
+                Szenen, Figuren, Dialoge, Probennotizen und Konzept werden mitgeschickt.\
+              </p>\
+              \
+              <div style="cursor:pointer; padding: 12px; border-radius: 10px; border: 1.5px solid #a87159; background: linear-gradient(135deg, rgba(168,113,89,0.08), rgba(139,92,246,0.06)); margin-bottom: 8px; transition: all 0.15s;" onclick="twinTransferViaLocalStorage()" onmouseover="this.style.borderColor=\'#78350f\'" onmouseout="this.style.borderColor=\'#a87159\'">\
+                <div style="font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 3px;">⚡ Direkter Transfer</div>\
+                <div style="font-size: 11px; color: #6b7280;">Daten im Browser übergeben und Dramera öffnen. Funktioniert auf GitHub Pages (gleiche Domain).</div>\
+              </div>\
+              \
+              <div style="cursor:pointer; padding: 12px; border-radius: 10px; border: 1.5px solid #e5e7eb; margin-bottom: 8px; transition: all 0.15s;" onclick="twinTransferViaFile()" onmouseover="this.style.borderColor=\'#a87159\'" onmouseout="this.style.borderColor=\'#e5e7eb\'">\
+                <div style="font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 3px;">📁 Als Datei herunterladen</div>\
+                <div style="font-size: 11px; color: #6b7280;">NINA-Exchange v4.0 Datei (.nina.json) speichern und in Dramera manuell importieren.</div>\
+              </div>\
+              \
+              <div style="cursor:pointer; padding: 12px; border-radius: 10px; border: 1.5px solid #e5e7eb; margin-bottom: 12px; transition: all 0.15s;" onclick="twinTransferViaURL()" onmouseover="this.style.borderColor=\'#a87159\'" onmouseout="this.style.borderColor=\'#e5e7eb\'">\
+                <div style="font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 3px;">🔗 Via Link öffnen</div>\
+                <div style="font-size: 11px; color: #6b7280;">Dramera mit den Daten als URL-Parameter öffnen. Nur für kleinere Projekte (unter 32 KB).</div>\
+              </div>\
+              \
+              <div style="padding: 10px 12px; border-radius: 8px; background: linear-gradient(135deg, rgba(168,113,89,0.08), rgba(139,92,246,0.06)); border: 1px solid rgba(168,113,89,0.2); font-size: 11px; color: #374151; margin-bottom: 10px;">\
+                <div style="font-weight: 600; margin-bottom: 4px;">Was wird übertragen:</div>\
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px;">\
+                  <span>👤 ' + state.figuren.length + ' Figuren</span>\
+                  <span>🎬 ' + state.szenen.length + ' Szenen</span>\
+                  <span>🎛️ ' + state.cues.length + ' Cues</span>\
+                  <span>📝 ' + szenenMitText + ' mit Text</span>\
+                  ' + ((state.beziehungen || []).length > 0 ? '<span>🔗 ' + state.beziehungen.length + ' Beziehungen</span>' : '') + '\
+                  ' + ((state.probeplan || []).length > 0 ? '<span>📅 ' + state.probeplan.length + ' Proben</span>' : '') + '\
+                </div>\
+              </div>\
+              \
+              ' + (syncText ? '<div style="margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #f9fafb; border: 1px solid #e5e7eb; font-size: 11px; color: #6b7280;">Letzter Sync: <strong style="color: #374151;">' + syncText + '</strong></div>' : '') + '\
+              \
+              <div style="margin-top: 12px; font-size: 10.5px; color: #9ca3af; line-height: 1.4;">\
+                💡 Bestehende Daten in Dramera werden nicht überschrieben — nur leere Felder werden aufgefüllt.\
+                Probennotizen und Cues werden als Rebu-Daten mitgeschickt.\
+              </div>\
+            </div>\
+          </div>\
+        </div>';
     }
     
     async function checkCloudAuth() {
@@ -5663,6 +6114,7 @@ WICHTIGE REGELN:
         ${state.showImportModal ? renderImportModal() : ''}
         ${state.showHelpModal ? renderHelpModal() : ''}
         ${state.showExportModal ? renderExportModal() : ''}
+        ${state.showTwinModal ? renderTwinModal() : ''}
         ${state.showOeffnenModal ? renderOeffnenModal() : ''}
         ${state.showSichernUnterModal ? renderSichernUnterModal() : ''}
         ${state.showFassungModal ? renderFassungModal() : ''}
@@ -5954,9 +6406,16 @@ WICHTIGE REGELN:
                 <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); openModal('showExportModal')">
                   <span>⬆️</span> Exportieren…
                 </button>
-                
+
                 <div class="border-t border-white/10 my-1"></div>
-                
+
+                <!-- Twin System -->
+                <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); openModal('showTwinModal')" style="background: linear-gradient(135deg, rgba(168,113,89,0.15), rgba(139,92,246,0.1));">
+                  <span>📐</span> In Dramera öffnen…
+                </button>
+
+                <div class="border-t border-white/10 my-1"></div>
+
                 <!-- Drucken -->
                 <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); exportTextfassungPDF()">
                   <span>🖨️</span> Drucken
@@ -6018,6 +6477,10 @@ WICHTIGE REGELN:
           </div>
           <div class="flex items-center gap-3">
             <span id="autosave-indicator" class="text-xs text-gray-400" style="min-width: 60px;"></span>
+            <button class="dramera-twin-btn" onclick="openModal('showTwinModal')" title="${getTwinSyncText() ? 'Letzter Sync: ' + getTwinSyncText() : 'Projekt in Dramera (Werkbank) öffnen'}">
+              <span style="font-size: 14px;">📐</span> Dramera
+              <span class="sync-dot ${getTwinSyncDotClass()}"></span>
+            </button>
             <span class="px-2 py-1 ${isCloudProject ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'} rounded-full text-xs font-medium">
               ${isCloudProject ? '☁️' : '💾'} ${projektName}
             </span>
@@ -11617,8 +12080,20 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
               ` : ''}
               
               <div class="space-y-2">
-                <p class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Datenaustausch</p>
-                
+                <p class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Zwillingssystem</p>
+
+                <div class="border-2 rounded-lg p-3 hover:opacity-90 cursor-pointer" style="background: linear-gradient(135deg, rgba(168,113,89,0.12), rgba(139,92,246,0.08)); border-color: #a87159;" onclick="closeModal('showExportModal'); openModal('showTwinModal')">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <p class="font-medium text-sm" style="color: #78350f;">📐 In Dramera öffnen</p>
+                      <p class="text-xs" style="color: #92400e;">Projekt an die Werkbank übertragen${getTwinSyncText() ? ' · Letzter Sync: ' + getTwinSyncText() : ''}</p>
+                    </div>
+                    <span style="font-size: 1.2rem;">⚡</span>
+                  </div>
+                </div>
+
+                <p class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1 mt-3">Datenaustausch</p>
+
                 <div class="border-2 rounded-lg p-3 hover:opacity-90 cursor-pointer" style="background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(168,113,89,0.15)); border-color: #a87159;" onclick="exportForDramera()">
                   <div class="flex items-center gap-3">
                     <div>
@@ -12759,170 +13234,15 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     // Vollständiges Format für Werkbank, Rebu, Propla
     // ============================================
     function exportForDramera() {
-      // NINA-Exchange Format v2.0 erstellen
-      const ninaExport = {
-        format: 'nina-exchange',
-        version: '3.0',
-        exportedFrom: 'rebu',
-        exportedAt: new Date().toISOString(),
-        
-        // === PROJEKT (alle Felder) ===
-        project: {
-          name: state.projektMeta.titel || 'Unbenannt',
-          subtitle: state.projektMeta.untertitel || '',
-          author: state.projektMeta.autor || '',
-          director: state.projektMeta.regie || '',
-          description: state.projektMeta.logline || '',
-          tagline: state.projektMeta.tagline || '',
-          logline: state.projektMeta.logline || '',
-          copyright: state.projektMeta.copyright || '',
-          cover_image: (state.projektMeta.titelbild && !state.projektMeta.titelbild.startsWith('idb:')) ? state.projektMeta.titelbild : '',
-          premiere_date: state.projektMeta.premiere || null,
-          venue: state.projektMeta.spielort || '',
-          version_name: state.projektMeta.fassung || 'Arbeitsfassung',
-          version_date: state.projektMeta.fassungsDatum || new Date().toISOString(),
-          structure_type: state.projektMeta.strukturTyp || 'akte',
-          status: 'active'
-        },
-        
-        // === FIGUREN (alle Felder) ===
-        figures: state.figuren.map((f, idx) => ({
-          id: f._exchangeId || f.id,
-          name: f.name || '',
-          short_name: f.kuerzel || f.name?.substring(0, 3).toUpperCase() || '',
-          description: f.beschreibung || '',
-          figure_type: f.typ || 'main',
-          color: f.farbe || '#3b82f6',
-          sort_order: idx,
-          // Dramaturgie-Felder
-          want_external: f.want || '',
-          want_internal: f.wantInternal || '',
-          need: f.need || '',
-          ghost: f.ghost || '',
-          biography: f.biografie || f.beschreibung || '',
-          weakness: f.schwaeche || '',
-          strength: f.staerke || '',
-          characteristic: f.charakteristik || '',
-          archetype: f.archetyp || '',
-          profession: f.beruf || '',
-          goal: f.ziel || '',
-          obstacle: f.hindernis || '',
-          conflict: f.konflikt || '',
-          development: f.entwicklung || ''
-        })),
-        
-        // === SZENEN (alle Felder) ===
-        scenes: state.szenen.map((s, idx) => {
-          // Text aus Textbuch holen
-          const rawContent = state.textbuch[s.id] || '';
-          
-          // Figuren-IDs: bevorzugt _exchangeId verwenden für Roundtrip-Kompatibilität
-          const figurenIds = (s.figuren || []).map(fId => {
-            const fig = state.figuren.find(f => f.id === fId);
-            return fig ? (fig._exchangeId || fig.id) : fId;
-          });
-          
-          return {
-            id: s._exchangeId || s.id,
-            number: s.nummer || String(idx + 1),
-            name: s.titel || `Szene ${idx + 1}`,
-            act: s.gruppe || '',
-            group: s.gruppe || '',
-            description: s.zusammenfassung || '',
-            summary: s.zusammenfassung || '',
-            location: s.ort || '',
-            time: s.zeit || '',
-            figures: figurenIds,
-            content: rawContent,
-            estimated_duration: s.dauer || null,
-            status: 'written',
-            sort_order: idx
-          };
-        }),
-        
-        // === CUES (Licht, Ton, Video) ===
-        cues: state.cues.map(c => ({
-          id: c.id,
-          scene_id: c.szeneId,
-          cue_type: c.typ,
-          cue_number: c.nummer,
-          description: c.beschreibung || '',
-          anchor_text: c.ankerText || '',
-          duration: c.dauer || '',
-          sort_order: c.sortOrder || 0
-        })),
-        
-        // === MEDIEN (Audio, Video, Bilder) ===
-        media: (state.medien || []).map(m => ({
-          id: m.id,
-          name: m.name || '',
-          type: m.typ || 'audio',
-          url: m.url || '',
-          scene_id: m.szeneId || null
-        })),
-        
-        // === PERSONEN (Ensemble + Künstlerisches Team) ===
-        persons: [
-          ...(state.ensemble || []).map(p => ({
-            id: p.id || genId(),
-            name: p.name || '',
-            role: 'Schauspiel',
-            function: 'Schauspiel',
-            category: 'ensemble',
-            notes: p.notizen || '',
-            email: p.email || '',
-            phone: p.telefon || '',
-            address: p.adresse || ''
-          })),
-          ...(state.team || []).map(p => ({
-            id: p.id || genId(),
-            name: p.name || '',
-            role: p.funktion || '',
-            function: p.funktion || '',
-            category: 'artistic_team',
-            notes: p.notizen || '',
-            email: p.email || '',
-            phone: p.telefon || '',
-            address: p.adresse || ''
-          }))
-        ],
-        
-        // === CASTINGS (Person → Figur Zuordnungen) ===
-        castings: (state.ensemble || []).flatMap(p => 
-          (p.rolleIds || []).map(fId => {
-            const fig = state.figuren.find(f => f.id === fId);
-            return {
-              person_id: p.id,
-              figure_id: fig ? (fig._exchangeId || fig.id) : fId,
-              casting_type: 'main',
-              notes: ''
-            };
-          })
-        ),
-        
-        // === PROBEPLAN ===
-        rehearsals: (state.probeplan || []).map(p => ({
-          id: p.id || genId(),
-          date: p.datum || '',
-          start_time: (p.zeit || '').split('–')[0]?.trim() || '',
-          end_time: (p.zeit || '').split('–')[1]?.trim() || '',
-          location: p.ort || '',
-          rehearsal_type: p.typ || '',
-          notes: p.notizen || '',
-          scene_ids: (p.szeneIds || []).map(sId => {
-            const sz = state.szenen.find(s => s.id === sId);
-            return sz ? (sz._exchangeId || sz.id) : sId;
-          })
-        })),
-        
-        absences: [],
-        team_availability: []
-      };
-      
+      // Nutze die gemeinsame v4.0 Export-Logik
+      const ninaExport = createNinaExchangeV4();
+      // Twin-Metadaten entfernen für manuellen Export
+      delete ninaExport.twin;
+
       // Als JSON-Datei herunterladen
       const fileName = makeExportFilename('NINA-Exchange', 'json');
       const content = JSON.stringify(ninaExport, null, 2);
-      
+
       // UTF-8 BOM für bessere Kompatibilität
       const BOM = '\uFEFF';
       const blob = new Blob([BOM + content], { type: 'application/json;charset=utf-8' });
@@ -12932,22 +13252,24 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       a.download = fileName;
       a.click();
       URL.revokeObjectURL(url);
-      
-      state.dirty = false; // Export erstellt
+
+      state.dirty = false;
       closeModal('showExportModal');
       const szenenMitText = state.szenen.filter(s => (state.textbuch[s.id] || '').trim().length > 0).length;
-      
-      let msg = '✅ NINA-Exchange v3.0 Export erstellt!\n\n';
+
+      let msg = '✅ NINA-Exchange v4.0 Export erstellt!\n\n';
       msg += `📁 Datei: ${fileName}\n\n`;
       msg += `📋 Projekt: ${state.projektMeta.titel || 'Unbenannt'}\n`;
       msg += `✍️ Autor: ${state.projektMeta.autor || '(nicht angegeben)'}\n\n`;
       msg += `👤 ${ninaExport.figures.length} Figuren\n`;
       msg += `🎬 ${ninaExport.scenes.length} Szenen (${szenenMitText} mit Text)\n`;
       msg += `🎛️ ${ninaExport.cues.length} Cues\n`;
-      if (ninaExport.persons.length > 0) msg += `🎭 ${ninaExport.persons.length} Personen (Team/Ensemble)\n`;
+      if (ninaExport.ensemble.length > 0 || ninaExport.team.length > 0) msg += `🎭 ${ninaExport.ensemble.length + ninaExport.team.length} Personen (Team/Ensemble)\n`;
       if (ninaExport.rehearsals.length > 0) msg += `📅 ${ninaExport.rehearsals.length} Probentermine\n`;
+      if (ninaExport.costumes.length > 0) msg += `👗 ${ninaExport.costumes.length} Kostüme\n`;
+      if (ninaExport.props.length > 0) msg += `🎭 ${ninaExport.props.length} Requisiten\n`;
       msg += `\nDiese Datei kann in Werkbank, Rebu und Propla importiert werden.`;
-      
+
       alert(msg);
     }
 
@@ -16000,7 +16322,14 @@ const NINA_LOGO_BASE64 = '';
       
       // Projekt laden
       initProjekt();
-      
+
+      // Twin-Import prüfen (Daten von Dramera?)
+      const twinIncoming = twinCheckForIncoming();
+      if (twinIncoming) {
+        // Kurz warten bis App gerendert ist, dann Import-Dialog zeigen
+        setTimeout(() => twinProcessIncoming(twinIncoming), 500);
+      }
+
       // Audio-URLs wiederherstellen
       try {
         await restoreAudioUrls();
