@@ -1104,6 +1104,14 @@
       border-color: #9333ea;
       color: #9333ea;
     }
+
+    /* AUTO-RESIZE TEXTAREAS */
+    textarea.auto-resize {
+      overflow: hidden !important;
+      resize: none !important;
+      min-height: 3em;
+      transition: height 0.05s ease;
+    }
   </style>
 </head>
 <body class="bg-gray-100">
@@ -1149,6 +1157,51 @@
     const FIGUR_ABBREV_LENGTH = 2;
     const KI_ANALYSIS_MAX_LENGTH = 35000;
     const CLAUDE_MODEL = 'claude-sonnet-4-6';
+
+    // ============================================
+    // AUTO-RESIZE TEXTAREAS
+    // ============================================
+    function autoResizeTextarea(el) {
+      if (!el || el.tagName !== 'TEXTAREA') return;
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+
+    function initAutoResizeTextareas() {
+      function processTextareas(root) {
+        const textareas = (root || document).querySelectorAll('textarea:not(.no-auto-resize)');
+        textareas.forEach(ta => {
+          if (!ta.classList.contains('auto-resize')) {
+            ta.classList.add('auto-resize');
+            autoResizeTextarea(ta);
+          }
+        });
+      }
+
+      // Event-Delegation: input-Events auf allen Textareas
+      document.addEventListener('input', (e) => {
+        if (e.target.tagName === 'TEXTAREA' && e.target.classList.contains('auto-resize')) {
+          autoResizeTextarea(e.target);
+        }
+      }, true);
+
+      // MutationObserver: Bei innerHTML-Re-Renders neue Textareas finden
+      const observer = new MutationObserver((mutations) => {
+        let shouldProcess = false;
+        for (const m of mutations) {
+          if (m.addedNodes.length > 0) {
+            shouldProcess = true;
+            break;
+          }
+        }
+        if (shouldProcess) {
+          requestAnimationFrame(() => processTextareas());
+        }
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
+      processTextareas();
+    }
 
     // ============================================
     // SUPABASE CLOUD - DEAKTIVIERT (Stand-alone Version)
@@ -16625,6 +16678,9 @@ const NINA_LOGO_BASE64 = '';
       
       // Projekt laden
       initProjekt();
+
+      // Auto-Resize Textareas initialisieren
+      initAutoResizeTextareas();
 
       // Twin-Import prüfen (Daten von Dramera?)
       const twinIncoming = twinCheckForIncoming();
