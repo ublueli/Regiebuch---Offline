@@ -1138,6 +1138,19 @@
     };
 
     // ============================================
+    // KONSTANTEN
+    // ============================================
+    const MAX_UNDO_STACK = 50;
+    const URL_TRANSFER_MAX_LENGTH = 32000;
+    const STORAGE_WARNING_DEBOUNCE_MS = 30000;
+    const MS_PER_MINUTE = 60000;
+    const MS_PER_HOUR = 3600000;
+    const MS_PER_DAY = 86400000;
+    const FIGUR_ABBREV_LENGTH = 2;
+    const KI_ANALYSIS_MAX_LENGTH = 35000;
+    const CLAUDE_MODEL = 'claude-sonnet-4-6';
+
+    // ============================================
     // SUPABASE CLOUD - DEAKTIVIERT (Stand-alone Version)
     // ============================================
     const SUPABASE_URL = '';
@@ -1752,6 +1765,12 @@
     let apiKeyStatus = 'idle'; // 'idle', 'testing', 'success', 'error'
     let apiKeyError = '';
 
+    // Import-Wizard State
+    let importWizardStep = 'upload'; // 'upload', 'analyzing', 'preview', 'importing'
+    let importAnalysis = null;       // KI-Analyse-Ergebnis
+    let importProgress = { current: 0, total: 1, phase: '' };
+    let importFullText = '';         // Original-Text für Szenen-Zuordnung
+
     // ============================================
     // CLOUD FUNKTIONEN
     // ============================================
@@ -1786,9 +1805,9 @@
         const d = new Date(syncStatus.lastSync);
         const now = new Date();
         const diffMs = now - d;
-        const diffMin = Math.floor(diffMs / 60000);
-        const diffH = Math.floor(diffMs / 3600000);
-        const diffD = Math.floor(diffMs / 86400000);
+        const diffMin = Math.floor(diffMs / MS_PER_MINUTE);
+        const diffH = Math.floor(diffMs / MS_PER_HOUR);
+        const diffD = Math.floor(diffMs / MS_PER_DAY);
 
         let timeStr;
         if (diffMin < 1) timeStr = 'gerade eben';
@@ -2068,7 +2087,7 @@
 
       try {
         const jsonStr = JSON.stringify(exchangeData);
-        if (jsonStr.length > 32000) {
+        if (jsonStr.length > URL_TRANSFER_MAX_LENGTH) {
           alert('Das Projekt ist zu gross für den URL-Transfer (' + Math.round(jsonStr.length / 1024) + ' KB).\n\nBitte nutze stattdessen den direkten Transfer oder den Datei-Download.');
           return;
         }
@@ -2154,7 +2173,7 @@
       const szenenMitText = state.szenen.filter(s => (state.textbuch[s.id] || '').trim().length > 0).length;
 
       return '\
-        <div class="modal-overlay" onclick="closeModal(\'showTwinModal\')">\
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal(\'showTwinModal\')">\
           <div class="modal-content" style="max-width: 520px; max-height: 85vh; overflow-y: auto;" onclick="event.stopPropagation()">\
             <div class="modal-header">\
               <h2 class="text-lg font-semibold">📐 In Dramera öffnen</h2>\
@@ -3153,7 +3172,7 @@ was morgen kommt – wer ist dabei?</p>
       if (!allOk) {
         console.error(`⚠️ ${failCount} von ${results.length} Speichervorgängen fehlgeschlagen!`);
         // Nur einmal warnen, nicht bei jedem Keystroke
-        if (!state._lastStorageWarning || Date.now() - state._lastStorageWarning > 30000) {
+        if (!state._lastStorageWarning || Date.now() - state._lastStorageWarning > STORAGE_WARNING_DEBOUNCE_MS) {
           state._lastStorageWarning = Date.now();
           alert('⚠️ Speicher voll!\n\n' + failCount + ' Datenbereiche konnten NICHT gespeichert werden.\n\n' +
                 'Bitte SOFORT ein Backup exportieren (💾 Sichern unter) und ungenutzte Projekte löschen!\n\n' +
@@ -3353,7 +3372,7 @@ was morgen kommt – wer ist dabei?</p>
       const apiKey = localStorage.getItem('nina_rebu_api_key') || '';
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showProjektModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showProjektModal')">
           <div class="modal-content" style="max-width: 650px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">${isEdit ? '⚙️ Projekt-Einstellungen' : '📁 Neues Projekt'}</h2>
@@ -3446,11 +3465,11 @@ was morgen kommt – wer ist dabei?</p>
                       ${(state.projektMeta.eigeneGruppen || ['Erster Akt']).map((g, idx) => `
                         <div class="flex items-center gap-1 bg-white rounded px-2 py-1 text-sm">
                           <span class="text-gray-400 text-xs w-4">${idx + 1}.</span>
-                          <input type="text" value="${g}" class="flex-1 border-0 bg-transparent text-sm p-0"
-                                 onchange="renameGruppe('${g}', this.value)">
-                          <button type="button" class="text-gray-400 hover:text-blue-600" onclick="moveGruppe('${g}', -1)" title="Nach oben">▲</button>
-                          <button type="button" class="text-gray-400 hover:text-blue-600" onclick="moveGruppe('${g}', 1)" title="Nach unten">▼</button>
-                          <button type="button" class="text-gray-400 hover:text-red-600" onclick="if(confirm('Gruppe löschen?')) deleteGruppe('${g}')" title="Löschen">✕</button>
+                          <input type="text" value="${escapeHtml(g)}" class="flex-1 border-0 bg-transparent text-sm p-0"
+                                 onchange="renameGruppe(this.dataset.name, this.value)" data-name="${escapeHtml(g)}">
+                          <button type="button" class="text-gray-400 hover:text-blue-600" onclick="moveGruppe(this.dataset.name, -1)" data-name="${escapeHtml(g)}" title="Nach oben">▲</button>
+                          <button type="button" class="text-gray-400 hover:text-blue-600" onclick="moveGruppe(this.dataset.name, 1)" data-name="${escapeHtml(g)}" title="Nach unten">▼</button>
+                          <button type="button" class="text-gray-400 hover:text-red-600" onclick="if(confirm('Gruppe löschen?')) deleteGruppe(this.dataset.name)" data-name="${escapeHtml(g)}" title="Löschen">✕</button>
                         </div>
                       `).join('')}
                     </div>
@@ -3721,25 +3740,14 @@ was morgen kommt – wer ist dabei?</p>
       const neueProjekte = projekte.filter(p => p.id !== projektId);
       save(KEYS.projekte, neueProjekte);
       
-      // Projekt-Daten VOLLSTÄNDIG löschen (inkl. v3.0 Keys)
-      localStorage.removeItem(KEYS.projektMeta(projektId));
-      localStorage.removeItem(KEYS.figuren(projektId));
-      localStorage.removeItem(KEYS.szenen(projektId));
-      localStorage.removeItem(KEYS.textbuch(projektId));
-      localStorage.removeItem(KEYS.cues(projektId));
-      localStorage.removeItem(KEYS.fassungen(projektId));
-      localStorage.removeItem(KEYS.requisiten(projektId));
-      localStorage.removeItem(KEYS.kostueme(projektId));
-      localStorage.removeItem(KEYS.medien(projektId));
-      localStorage.removeItem(KEYS.buehne(projektId));
-      // v3.0 Keys — bisher fehlten diese!
-      localStorage.removeItem(KEYS.konzept(projektId));
-      localStorage.removeItem(KEYS.beziehungen(projektId));
-      localStorage.removeItem(KEYS.rechercheMaterial(projektId));
-      localStorage.removeItem(KEYS.musikkonzept(projektId));
-      localStorage.removeItem(KEYS.ensemble(projektId));
-      localStorage.removeItem(KEYS.team(projektId));
-      localStorage.removeItem(KEYS.probeplan(projektId));
+      // Projekt-Daten VOLLSTÄNDIG löschen (alle KEYS-Funktionen)
+      const projektKeyFns = [
+        'projektMeta', 'figuren', 'szenen', 'textbuch', 'cues', 'fassungen',
+        'requisiten', 'kostueme', 'medien', 'buehne',
+        'konzept', 'beziehungen', 'rechercheMaterial', 'musikkonzept',
+        'ensemble', 'team', 'probeplan'
+      ];
+      projektKeyFns.forEach(fn => localStorage.removeItem(KEYS[fn](projektId)));
       
       // IndexedDB-Medien zum Projekt aufräumen
       try {
@@ -3830,7 +3838,7 @@ was morgen kommt – wer ist dabei?</p>
             state.figuren = d.figuren.map(f => ({
               id: f.id || genId(),
               name: (f.name || 'Unbenannt').toUpperCase(),
-              kuerzel: f.kuerzel || f.name?.substring(0, 2).toUpperCase() || 'XX',
+              kuerzel: f.kuerzel || f.name?.substring(0, FIGUR_ABBREV_LENGTH).toUpperCase() || 'XX',
               beschreibung: f.beschreibung || f.wesen || '',
               want: f.want || f.wantExternal || '',
               need: f.need || f.needInternal || '',
@@ -4093,8 +4101,8 @@ was morgen kommt – wer ist dabei?</p>
         content: cleanContent
       });
       
-      // Max 50 Einträge
-      if (state.undoStack.length > 50) {
+      // Max Einträge begrenzen
+      if (state.undoStack.length > MAX_UNDO_STACK) {
         state.undoStack.shift();
       }
       
@@ -4280,10 +4288,10 @@ was morgen kommt – wer ist dabei?</p>
               if (dMatch) {
                 const figurName = dMatch[1].trim().toUpperCase();
                 const dialogText = dMatch[2] || '';
-                newElement.innerHTML = `<span class="figur-name">${figurName}:</span><span class="dialog-text">${dialogText}</span>`;
+                newElement.innerHTML = `<span class="figur-name">${escapeHtml(figurName)}:</span><span class="dialog-text">${escapeHtml(dialogText)}</span>`;
               } else {
                 // Kein Doppelpunkt gefunden - ganzer Text wird Dialog
-                newElement.innerHTML = `<span class="figur-name">FIGUR:</span><span class="dialog-text">${text}</span>`;
+                newElement.innerHTML = `<span class="figur-name">FIGUR:</span><span class="dialog-text">${escapeHtml(text)}</span>`;
               }
               break;
               
@@ -5005,10 +5013,13 @@ was morgen kommt – wer ist dabei?</p>
       }
       
       // Normaler Editor (Technik / Schauspieler)
-      return `<div id="text-editor" 
+      return `<div id="text-editor"
                    class="editor-content ${getEditorClasses()}"
                    contenteditable="true"
-                   spellcheck="true">${displayContent}</div>`;
+                   spellcheck="true"
+                   role="textbox"
+                   aria-multiline="true"
+                   aria-label="Textbuch-Editor">${displayContent}</div>`;
     }
     
     function setTextbuchModus(modus) {
@@ -5509,7 +5520,7 @@ was morgen kommt – wer ist dabei?</p>
             'anthropic-dangerous-direct-browser-access': 'true'
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
+            model: CLAUDE_MODEL,
             max_tokens: 10,
             messages: [{ role: 'user', content: 'Antworte nur mit: OK' }]
           })
@@ -5760,7 +5771,7 @@ WICHTIGE REGELN:
             'anthropic-dangerous-direct-browser-access': 'true'
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
+            model: CLAUDE_MODEL,
             max_tokens: 2000,
             system: systemPrompt,
             messages: apiMessages
@@ -5928,7 +5939,7 @@ WICHTIGE REGELN:
       }));
       
       return `
-        <div class="modal-overlay" onclick="state.showProjektListeModal = false; render()">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="state.showProjektListeModal = false; render()">
           <div class="modal-content" style="max-width: 500px;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h3>📂 Projekt öffnen</h3>
@@ -5980,7 +5991,7 @@ WICHTIGE REGELN:
       const hatCloudId = aktuellesProjekt?.cloudId;
       
       return `
-        <div class="modal-overlay" onclick="state.showCloudModal = false; render()">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="state.showCloudModal = false; render()">
           <div class="modal-content" style="max-width: 600px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h3>☁️ Cloud-Synchronisation</h3>
@@ -6218,7 +6229,7 @@ WICHTIGE REGELN:
               // Gleiche Figur beibehalten
               const figurSpan = currentBlock.querySelector('.figur-name');
               const figurName = figurSpan ? figurSpan.textContent : '';
-              newEl.innerHTML = `<span class="figur-name">${figurName}</span><span class="dialog-text">${afterText}</span>`;
+              newEl.innerHTML = `<span class="figur-name">${escapeHtml(figurName)}</span><span class="dialog-text">${escapeHtml(afterText)}</span>`;
             } else if (afterText) {
               // Gleiche Klasse beibehalten
               newEl.className = currentClass.replace('format-dialog', '').trim() || 'format-standard';
@@ -6350,7 +6361,7 @@ WICHTIGE REGELN:
       const projektTitel = state.projektMeta?.titel || 'Unbenannt';
       
       return `
-        <div class="sidebar w-56 flex flex-col text-white">
+        <nav class="sidebar w-56 flex flex-col text-white" role="navigation" aria-label="Hauptnavigation">
           <!-- Logo (größer) -->
           <div class="p-4 border-b border-white/10">
             <div class="text-center">
@@ -6447,8 +6458,11 @@ WICHTIGE REGELN:
             </div>
             ${navItems.map(item => `
               <div class="nav-item ${state.currentView === item.id ? 'active' : ''} px-3 py-2 flex items-center gap-2"
-                   onclick="navigateTo('${item.id}')">
-                <span>${item.icon}</span>
+                   role="button" tabindex="0"
+                   aria-current="${state.currentView === item.id ? 'page' : 'false'}"
+                   onclick="navigateTo('${item.id}')"
+                   onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();navigateTo('${item.id}')}">
+                <span aria-hidden="true">${item.icon}</span>
                 <span class="text-sm">${item.label}</span>
               </div>
             `).join('')}
@@ -6462,8 +6476,8 @@ WICHTIGE REGELN:
               🤖 KI-Assistent ${getApiKey() ? '' : '(Key fehlt)'}
             </button>
           </div>
-          
-        </div>
+
+        </nav>
       `;
     }
 
@@ -6634,7 +6648,7 @@ WICHTIGE REGELN:
                   ${figuren.map(f => `
                     <div class="flex items-start gap-4 py-2 border-b border-gray-100 last:border-0">
                       <div class="w-12 h-12 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold flex-shrink-0">
-                        ${f.kuerzel || (f.name || '').substring(0, 2).toUpperCase()}
+                        ${f.kuerzel || (f.name || '').substring(0, FIGUR_ABBREV_LENGTH).toUpperCase()}
                       </div>
                       <div class="flex-1">
                         <div class="font-semibold text-gray-800">${f.name || 'Unbenannt'}</div>
@@ -9425,7 +9439,7 @@ WICHTIGE REGELN:
       const modS = isMac ? '⌘⇧' : 'Ctrl+Shift';
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showHelpModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showHelpModal')">
           <div class="modal-content" style="max-width: 700px; max-height: 85vh; overflow-y: auto;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">Hilfe & Tastenkürzel</h2>
@@ -9572,7 +9586,7 @@ WICHTIGE REGELN:
       const hasApiKey = !!localStorage.getItem('nina_rebu_api_key');
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showImportModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showImportModal')">
           <div class="modal-content" style="max-width: 650px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">⬇️ Importieren</h2>
@@ -9596,27 +9610,66 @@ WICHTIGE REGELN:
                 💡 Um ein gesichertes Projekt zu <strong>öffnen</strong>, nutze <strong>Menü → Öffnen…</strong>
               </div>
               
-              <!-- Word/PDF Tab (NEU - Primär) -->
+              <!-- Word/PDF Tab mit Wizard -->
               <div id="import-tab-word">
+                ${importWizardStep === 'analyzing' ? `
+                <!-- SCHRITT 2: Analysieren -->
+                <div style="text-align: center; padding: 24px 0;">
+                  <div style="width: 48px; height: 48px; border: 3px solid #2563eb; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 16px;"></div>
+                  <div style="font-size: 16px; font-weight: 600; color: #1e40af; margin-bottom: 8px;">KI analysiert...</div>
+                  <div style="font-size: 13px; color: #6b7280; margin-bottom: 16px;">${escapeHtml(importProgress.phase)}</div>
+                  ${importProgress.total > 1 ? `
+                  <div style="background: #e5e7eb; border-radius: 999px; height: 8px; overflow: hidden; margin: 0 32px;">
+                    <div style="background: linear-gradient(90deg, #3b82f6, #8b5cf6); height: 100%; border-radius: 999px; transition: width 0.5s ease; width: ${Math.round((importProgress.current / importProgress.total) * 100)}%;"></div>
+                  </div>
+                  <div style="font-size: 11px; color: #9ca3af; margin-top: 6px;">Abschnitt ${importProgress.current} von ${importProgress.total}</div>
+                  ` : `
+                  <div style="font-size: 11px; color: #9ca3af;">Dies kann 10-60 Sekunden dauern...</div>
+                  `}
+                </div>
+
+                ` : importWizardStep === 'preview' ? `
+                <!-- SCHRITT 3: Vorschau -->
+                <div style="margin-bottom: 12px; display: flex; gap: 6px;">
+                  <span style="font-size: 11px; background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 10px;">👤 ${(importAnalysis?.figuren || []).filter(f => f._selected).length} Figuren</span>
+                  <span style="font-size: 11px; background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 10px;">🎬 ${(importAnalysis?.szenen || []).length} Szenen</span>
+                  <span style="font-size: 11px; background: #ede9fe; color: #5b21b6; padding: 2px 8px; border-radius: 10px;">🔗 ${(importAnalysis?.beziehungen || []).length} Beziehungen</span>
+                  <span style="font-size: 11px; background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 10px;">🎭 ${(importAnalysis?.themen || []).length} Themen</span>
+                </div>
+                ${renderImportWizardPreview()}
+                <div class="flex gap-2" style="margin-top: 12px;">
+                  <button class="btn btn-outline flex-1" onclick="wizardBackToUpload()">← Zurück</button>
+                  <button class="btn btn-primary flex-1" onclick="executeWizardImport()">✓ Importieren</button>
+                </div>
+
+                ` : importWizardStep === 'importing' ? `
+                <!-- SCHRITT 4: Import -->
+                <div style="text-align: center; padding: 32px 0;">
+                  <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
+                  <div style="font-size: 16px; font-weight: 600; color: #059669;">Import wird ausgeführt...</div>
+                </div>
+
+                ` : `
+                <!-- SCHRITT 1: Upload -->
                 <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 cursor-pointer mb-4"
                      onclick="document.getElementById('import-word-input').click()">
                   <div class="text-4xl mb-2">📄</div>
                   <p class="text-sm text-gray-600" id="import-word-name">Word (.docx) oder PDF auswählen...</p>
                   <input type="file" id="import-word-input" accept=".docx,.pdf" class="hidden" onchange="handleDocumentFile(this)">
                 </div>
-                
+
                 <!-- Format-Info -->
                 <div id="import-format-info" style="display: none; margin-bottom: 16px; padding: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;">
                   <div style="font-size: 12px; color: #166534; font-weight: 500; margin-bottom: 6px;">🔍 Erkannte Formatierungen:</div>
                   <div id="import-format-details" style="font-size: 11px; color: #15803d;"></div>
                 </div>
-                
+
                 <!-- Preview -->
                 <div id="import-word-preview" style="display: none; margin-bottom: 16px;">
                   <div style="font-size: 14px; font-weight: 500; color: #374151; margin-bottom: 8px;">Vorschau:</div>
                   <div id="import-word-preview-text" style="border: 1px solid #e5e7eb; border-radius: 4px; background: #f9fafb; padding: 12px; max-height: 120px; overflow-y: auto; font-size: 11px; font-family: monospace; white-space: pre-wrap; word-break: break-word;"></div>
                 </div>
-                
+
                 <!-- Status -->
                 <div id="import-word-status" style="display: none; margin-bottom: 16px;">
                   <div style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: #2563eb;">
@@ -9624,14 +9677,19 @@ WICHTIGE REGELN:
                     <span id="import-word-status-text">Analysiere...</span>
                   </div>
                 </div>
-                
+
                 <div class="flex gap-2">
                   <button class="btn btn-outline flex-1" onclick="closeModal('showImportModal')">Abbrechen</button>
-                  <button class="btn btn-primary flex-1" id="import-word-btn" onclick="doImportWord(false)" disabled>📥 Als neues Stück</button>
+                  <button class="btn btn-primary flex-1" id="import-word-btn" onclick="doImportWord(false)" disabled>📥 Einfach</button>
+                  ${hasApiKey ? `
+                  <button class="btn flex-1" id="import-word-ki-btn" style="background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: white;" onclick="doImportWithAI(importedWordData?.text || '', getApiKey())" disabled>🤖 KI-Analyse</button>
+                  ` : ''}
                   ${state.szenen.length > 0 ? `
-                  <button class="btn flex-1" id="import-word-merge-btn" style="background:#059669;color:white;" onclick="doImportWord(true)" disabled>➕ In Projekt einfügen</button>
+                  <button class="btn flex-1" id="import-word-merge-btn" style="background:#059669;color:white;" onclick="doImportWord(true)" disabled>➕ Einfügen</button>
                   ` : ''}
                 </div>
+                ${!hasApiKey ? `<p class="text-xs text-gray-400 mt-2">💡 Hinterlege einen API-Key in den Einstellungen für KI-gestützte Analyse mit Vorschau.</p>` : `<p class="text-xs text-gray-400 mt-2">🤖 <strong>KI-Analyse</strong>: Erkennt Figuren (mit Want/Need/Ghost), Beziehungen, Themen, Szenen mit Spannungsbogen und Cue-Vorschlägen.</p>`}
+                `}
                 ${state.szenen.length > 0 ? `
                 <p class="text-xs text-gray-400 mt-2">💡 «In Projekt einfügen» behält bestehende Figuren, Szenen und Metadaten.</p>
                 ` : ''}
@@ -10799,8 +10857,10 @@ WICHTIGE REGELN:
         preview.style.display = 'block';
         previewText.textContent = result.text.substring(0, 1500) + (result.text.length > 1500 ? '\n...' : '');
         
-        // Button aktivieren
+        // Buttons aktivieren
         document.getElementById('import-word-btn').disabled = false;
+        const kiBtn = document.getElementById('import-word-ki-btn');
+        if (kiBtn) kiBtn.disabled = false;
         const mergeBtn = document.getElementById('import-word-merge-btn');
         if (mergeBtn) mergeBtn.disabled = false;
         
@@ -11160,7 +11220,7 @@ WICHTIGE REGELN:
       const newFiguren = figuren.map(f => ({
         id: genId(),
         name: f.name || 'Unbenannt',
-        kuerzel: (f.name || '').substring(0, 2).toUpperCase(),
+        kuerzel: (f.name || '').substring(0, FIGUR_ABBREV_LENGTH).toUpperCase(),
         beschreibung: f.beschreibung || ''
       }));
       
@@ -11253,19 +11313,19 @@ Die Figuren wurden aus der Figurenliste erkannt und den Szenen zugeordnet.`);
           continue;
         }
         
-        // Akt-Titel → als Überschrift formatieren
+        // Akt-Titel → als Akt-Format
         if (trimmed.includes('[[AKT:')) {
           const match = trimmed.match(/\[\[AKT:([^\]]+)\]\]/);
           const text = match ? match[1].trim() : trimmed;
-          formattedHtml.push('<p class="format-standard"><strong style="font-size: 1.2em;">' + escapeHtml(text) + '</strong></p>');
+          formattedHtml.push('<p class="format-akt-titel">' + escapeHtml(text) + '</p>');
           continue;
         }
-        
-        // Szene-Titel → als Überschrift formatieren
+
+        // Szene-Titel → als Szenen-Format
         if (trimmed.includes('[[SZENE:')) {
           const match = trimmed.match(/\[\[SZENE:([^\]]+)\]\]/);
           const text = match ? match[1].trim() : trimmed;
-          formattedHtml.push('<p class="format-standard"><strong>' + escapeHtml(text) + '</strong></p>');
+          formattedHtml.push('<p class="format-szene-titel">' + escapeHtml(text) + '</p>');
           continue;
         }
         
@@ -11285,16 +11345,18 @@ Die Figuren wurden aus der Figurenliste erkannt und den Szenen zugeordnet.`);
         // Regieanweisung → als Regie-Format
         if (trimmed.includes('[[REGIE:')) {
           const match = trimmed.match(/\[\[REGIE:([^\]]+)\]\]/);
-          const text = match ? match[1].trim() : trimmed;
-          formattedHtml.push('<p class="format-regie">' + escapeHtml(text) + '</p>');
+          let text = match ? match[1].trim() : trimmed;
+          if (!text.startsWith('(')) text = '(' + text;
+          if (!text.endsWith(')')) text = text + ')';
+          formattedHtml.push('<p class="format-regieanweisung">' + escapeHtml(text) + '</p>');
           continue;
         }
-        
-        // Lied → als kursiv
+
+        // Lied → als Lied-Format
         if (trimmed.includes('[[LIED:')) {
           const match = trimmed.match(/\[\[LIED:([^\]]+)\]\]/);
           const text = match ? match[1].trim() : trimmed;
-          formattedHtml.push('<p class="format-standard"><em>🎵 ' + escapeHtml(text) + '</em></p>');
+          formattedHtml.push('<p class="format-lied">' + escapeHtml(text) + '</p>');
           continue;
         }
         
@@ -11451,179 +11513,305 @@ Die Figuren wurden aus der Figurenliste erkannt und den Szenen zugeordnet.`);
     }
 
 
-    // KI-gestützter Import
-    async function doImportWithAI(text, apiKey) {
-      const status = document.getElementById('import-word-status');
-      const statusText = document.getElementById('import-word-status-text');
-      status.style.display = 'block';
-      statusText.textContent = 'Analysiere mit KI...';
-      document.getElementById('import-word-btn').disabled = true;
-      
-      // Nutze richText falls vorhanden (enthält Formatierungsmarker)
-      const analysisText = importedWordData?.richText || text;
-      const formatInfo = importedWordData?.formatInfo || {};
-      
-      try {
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true'
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 16000,
-            messages: [{
-              role: 'user',
-              content: `Du bist ein erfahrener Dramaturg. Analysiere dieses Theaterstück SEHR SORGFÄLTIG.
+    // ============================================
+    // KI-IMPORT WIZARD (Dramera-Style, 4 Schritte)
+    // ============================================
+    const CHUNK_MAX_SIZE = 25000;
 
-WICHTIG - SCHWEIZER RECHTSCHREIBUNG: Verwende IMMER "ss" statt "ß" (z.B. "Strasse", "gross", "weiss").
+    function splitTextIntoChunks(text, maxSize = CHUNK_MAX_SIZE) {
+      if (text.length <= maxSize) return [text];
+      const chunks = [];
+      const splitPatterns = [
+        /^(?:ERSTER|ZWEITER|DRITTER|VIERTER|FÜNFTER|\d+\.)\s*(?:AKT|AUFZUG|TEIL)\b/im,
+        /^(?:Act|Acte)\s+(?:\d+|[IVX]+)/im,
+        /^(?:\d+\.)\s*(?:Szene|SZENE|Auftritt|AUFTRITT)\b/im,
+        /^(?:Szene|Scene|Scène)\s+\d+/im,
+        /\n\n\n+/,
+        /\n\n/
+      ];
+      let remaining = text;
+      while (remaining.length > maxSize) {
+        let bestSplit = -1;
+        const searchFrom = Math.floor(maxSize * 0.6);
+        const chunk = remaining.substring(0, maxSize);
+        for (const pat of splitPatterns) {
+          const searchArea = chunk.substring(searchFrom);
+          const m = searchArea.match(pat);
+          if (m) {
+            bestSplit = searchFrom + m.index;
+            break;
+          }
+        }
+        if (bestSplit <= 0) bestSplit = chunk.lastIndexOf('\n', maxSize - 1);
+        if (bestSplit <= 0) bestSplit = maxSize;
+        chunks.push(remaining.substring(0, bestSplit));
+        remaining = remaining.substring(bestSplit).trimStart();
+      }
+      if (remaining.length > 0) chunks.push(remaining);
+      return chunks;
+    }
 
-=== FORMATIERUNGSMARKER IM TEXT ===
-Der Text enthält möglicherweise diese Marker:
-- [[ITALIC:text]] = Kursiver Text → Meist REGIEANWEISUNGEN
-- [[BOLD:text]] = Fetter Text → Meist FIGURENNAMEN oder ÜBERSCHRIFTEN  
-- [[HEADING:text]] = Überschrift → Meist AKT-/SZENEN-TITEL
-- [[REGIE:text]] = Als Regieanweisung formatiert
-- [[DIALOG:text]] = Als Dialog formatiert
-- [[SZENE:text]] = Als Szenentitel formatiert
-- [[AKT:text]] = Als Akttitel formatiert
-- [[LIED:text]] = Als Liedtext formatiert
+    async function analyzeChunk(chunkText, chunkIndex, totalChunks, knownFiguren, apiKey, formatInfo) {
+      const isFirst = chunkIndex === 0;
+      const figurenHint = knownFiguren.length > 0
+        ? `\nBereits erkannte Figuren aus vorherigen Abschnitten: ${knownFiguren.join(', ')}\nFüge NUR NEUE Figuren hinzu!`
+        : '';
+
+      const prompt = `Du bist ein erfahrener Dramaturg und Regieassistent. Analysiere diesen Textabschnitt (${chunkIndex + 1}/${totalChunks}) SEHR SORGFÄLTIG.
+
+WICHTIG - SCHWEIZER RECHTSCHREIBUNG: Verwende IMMER "ss" statt "ß".
+${figurenHint}
+
+=== FORMATIERUNGSMARKER ===
+- [[ITALIC:text]] = Kursiv → Meist Regieanweisungen
+- [[BOLD:text]] = Fett → Figurennamen/Überschriften
+- [[HEADING:text]] = Überschrift → Akt-/Szenen-Titel
+- [[REGIE:text]] / [[DIALOG:text]] / [[SZENE:text]] / [[AKT:text]] / [[LIED:text]]
 
 Erkannte Formatierungen: ${formatInfo.italicCount || 0}x kursiv, ${formatInfo.boldCount || 0}x fett, ${formatInfo.headingCount || 0}x Überschriften
 
-=== FIGURENLISTE ZUERST! (WICHTIG!) ===
-Suche am ANFANG des Textes nach einer Figurenliste:
-- "Personen:" / "Figuren:" / "Rollen:" / "Besetzung:"
-- "PERSONNAGES:" (französisch) / "Characters:" (englisch)
-- Format: "NAME - Beschreibung" oder "NAME, Rolle"
-- Gruppiert: "Die Bauern: Hans, Fritz, Karl"
-Die dort genannten Namen helfen bei der Dialog-Erkennung!
-
-=== STRUKTUR-TYPEN ===
-Erkenne welcher Strukturtyp vorliegt:
-1. AKTE & SZENEN: "1. Akt", "Erste Szene", "Akt II" → strukturTyp: "akte"
-2. AUFZÜGE & AUFTRITTE: "Erster Aufzug", "2. Auftritt" → strukturTyp: "akte"
-3. BILDER: Nur Nummern "1." "2." "3." oder "A." "B." → strukturTyp: "bilder"
-4. NUMMERIERT: "1.1", "1.2", "2.1" → strukturTyp: "sequenzen"
-5. SCHAUPLÄTZE: Ortsnamen als Überschriften → strukturTyp: "sequenzen"
-6. KEINE GLIEDERUNG: Fortlaufender Text → strukturTyp: "episodisch"
+=== ANALYSE-AUFGABEN ===
+${isFirst ? `1. FIGURENLISTE ZUERST! Suche am Anfang nach "Personen:", "Figuren:", "Rollen:", "Besetzung:", "Characters:", "PERSONNAGES:"
+2. Erkenne Titel, Autor, Gattung, Copyright` : ''}
+3. Erkenne ALLE Figuren mit TIEFENANALYSE:
+   - name, kuerzel (2 Buchstaben), beschreibung (2-3 Sätze)
+   - beruf: Beruf/soziale Stellung
+   - alter: Ungefähres Alter
+   - geschlecht: m/w/d
+   - want: Bewusstes Ziel der Figur
+   - need: Unbewusstes Bedürfnis
+   - ghost: Prägende Wunde/Trauma
+   - archetyp: protagonist/antagonist/mentor/ally/trickster/shapeshifter
+4. Erkenne BEZIEHUNGEN zwischen Figuren:
+   - figur1, figur2 (Namen)
+   - art: z.B. "Vater-Tochter", "Rivalen", "Liebende"
+   - typ: familie/liebe/freundschaft/rivalitaet/feindschaft/beruflich
+   - beschreibung: Was verbindet oder trennt sie?
+5. Erkenne THEMEN des Stücks (z.B. "Macht", "Schuld", "Identität")
+6. Erkenne SZENEN mit:
+   - nummer, titel (aussagekräftig, 3-6 Wörter), gruppe (Akt-Nr.)
+   - ort, zeit, zusammenfassung (2-3 Sätze)
+   - figuren: Array der anwesenden Figuren
+   - wendepunkt: Entscheidender Moment (falls vorhanden)
+   - spannungswert: 0-10 (muss einen Bogen ergeben!)
+   - textAnfang: EXAKT die ersten 50 Zeichen (ohne Marker)
+   - hatLieder: true/false
+   - cueHinweise: Array von Cue-Vorschlägen z.B. ["Licht: Morgenstimmung", "Sound: Donner", "Musik: Walzer"]
 
 === DIALOG-FORMATE ===
-Erkenne das verwendete Format:
 - NAME: Text (Doppelpunkt) = häufigstes Format
-- NAME. Text (Punkt) = Oper, Klassik (z.B. "LUCENTIO. Holde Bianca...")
-- NAME (ohne Zeichen, eigene Zeile) = modernes Theater
-- 1. BAUER: / 2. SOLDAT: = Nummerierte generische Figuren
-- ERSTER MANN: / ZWEITE FRAU: = Generische Figuren
-- CHOR. / ALLE: = Gruppen-Sprecher
+- NAME. Text (Punkt) = Oper, Klassik
+- 1. BAUER: / CHOR. / ALLE: = Generische/Gruppen-Sprecher
 
 === SZENEN-ERKENNUNG ===
-Szenenwechsel erkennen:
-1. Explizite Marker: "1. Szene", "Szene 2", "Erste Szene"
-2. Akt-Wechsel: "2. Akt", "ERSTER AKT" → danach neue Szene
-3. Bild-Nummern: "1." "2." "3." (allein auf Zeile)
-4. Ortswechsel: Neue Überschrift oder (Klammern)
-5. Zeitsprung: "Am nächsten Morgen", "Später"
-6. "Vorhang" oder "Verwandlung"
-
-REGEL: Jeder ORTSWECHSEL oder ZEITSPRUNG = NEUE SZENE!
-
-=== REGIEANWEISUNGEN ===
-- Text in (Klammern) der NICHT in einem Dialog steht
-- [[ITALIC:text]] = Kursiv (häufigstes Format!)
-- Eigenständig: "(Er geht zur Tür)", "(Stille)", "(Ab)"
-- Bühne: "(Licht:...)", "(Musik:...)"
-
-=== MUSICAL/OPER ===
-Wenn Lieder vorhanden:
-- "Musik Nr.X" / "Lied Nr.X" / "Text Nr.X"
-- "REFRAIN:" / "(singt)" / "singt:"
-- Setze hatLieder: true
+Jeder ORTSWECHSEL oder ZEITSPRUNG = NEUE SZENE!
+Marker: "Szene X", Akt-Wechsel, Bild-Nummern, "Vorhang", "Verwandlung"
 
 Antworte NUR mit validem JSON:
-
 {
-  "titel": "Haupttitel des Stücks",
-  "untertitel": "Untertitel/Gattung falls vorhanden",
-  "autor": "Autor:in falls erkennbar",
-  "uebersetzer": "Übersetzer falls erkennbar",
-  "copyright": "© Jahr falls erkennbar",
+  ${isFirst ? `"titel": "Haupttitel",
+  "untertitel": "Gattung/Untertitel",
+  "autor": "Autor:in",
+  "uebersetzer": "Übersetzer",
+  "copyright": "© Jahr",
   "tagline": "Werbeslogan (max 8 Wörter)",
   "logline": "Worum geht es? (2-3 Sätze)",
   "strukturTyp": "akte|sequenzen|bilder|episodisch",
-  "istMusical": false,
+  "istMusical": false,` : ''}
   "figuren": [
     {
-      "name": "FIGURENNAME",
-      "kuerzel": "FN",
-      "beschreibung": "Wer ist diese Figur? Was will sie? (2-3 Sätze)"
+      "name": "NAME", "kuerzel": "NA",
+      "beschreibung": "2-3 Sätze",
+      "beruf": "Beruf", "alter": "~40", "geschlecht": "m",
+      "want": "Bewusstes Ziel", "need": "Unbewusstes Bedürfnis",
+      "ghost": "Prägende Wunde", "archetyp": "protagonist"
     }
   ],
+  "beziehungen": [
+    { "figur1": "A", "figur2": "B", "art": "Rivalen", "typ": "rivalitaet", "beschreibung": "..." }
+  ],
+  "themen": ["Macht", "Schuld"],
   "szenen": [
     {
-      "nummer": "1.1",
-      "titel": "Aussagekräftiger Titel",
-      "gruppe": "1",
-      "ort": "Wo?",
-      "zeit": "Wann?",
-      "zusammenfassung": "Was passiert? (2-3 Sätze)",
+      "nummer": "1.1", "titel": "Aussagekräftiger Titel", "gruppe": "1",
+      "ort": "Wo?", "zeit": "Wann?",
+      "zusammenfassung": "2-3 Sätze",
       "figuren": ["FIGUR1", "FIGUR2"],
-      "textAnfang": "Die ersten 50 Zeichen exakt",
-      "hatLieder": false
+      "wendepunkt": "Entscheidender Moment",
+      "spannungswert": 5,
+      "textAnfang": "Exakt 50 Zeichen",
+      "hatLieder": false,
+      "cueHinweise": ["Licht: Morgenstimmung"]
     }
   ]
 }
 
-QUALITÄTSREGELN:
-- Suche ZUERST nach der Figurenliste!
-- Erkenne ALLE Szenen und ALLE Figuren
-- "gruppe": "1" = Akt 1, "2" = Akt 2, etc.
-- textAnfang: EXAKT die ersten 50 Zeichen (ohne Marker)
+TEXT ZUR ANALYSE (Abschnitt ${chunkIndex + 1}/${totalChunks}):
+${chunkText}`;
 
-TEXT ZUR ANALYSE:
-${analysisText.substring(0, 35000)}${analysisText.length > 35000 ? '\n[gekürzt]' : ''}`
-            }]
-          })
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: CLAUDE_MODEL,
+          max_tokens: 32000,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error('API-Fehler ' + response.status + ': ' + errText.substring(0, 200));
+      }
+
+      const data = await response.json();
+      const aiText = data.content[0].text;
+
+      // Robustes JSON-Parsen
+      let json;
+      try {
+        const codeBlock = aiText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        const raw = codeBlock ? codeBlock[1] : aiText.match(/\{[\s\S]*\}/)?.[0] || aiText;
+        const cleaned = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+          .replace(/,\s*([}\]])/g, '$1');
+        json = JSON.parse(cleaned);
+      } catch (e) {
+        console.error('JSON Parse Error für Chunk ' + chunkIndex + ':', aiText.substring(0, 500));
+        throw new Error('KI-Antwort für Abschnitt ' + (chunkIndex + 1) + ' konnte nicht verarbeitet werden.');
+      }
+      return json;
+    }
+
+    function mergeChunkResults(results) {
+      const merged = {
+        titel: '', untertitel: '', autor: '', uebersetzer: '', copyright: '',
+        tagline: '', logline: '', strukturTyp: '', istMusical: false,
+        figuren: [], beziehungen: [], themen: [], szenen: []
+      };
+
+      const figurenMap = new Map();
+      const themenSet = new Set();
+      const bezSet = new Set();
+
+      results.forEach((r, i) => {
+        if (i === 0) {
+          merged.titel = r.titel || '';
+          merged.untertitel = r.untertitel || '';
+          merged.autor = r.autor || '';
+          merged.uebersetzer = r.uebersetzer || '';
+          merged.copyright = r.copyright || '';
+          merged.tagline = r.tagline || '';
+          merged.logline = r.logline || '';
+          merged.strukturTyp = r.strukturTyp || '';
+          merged.istMusical = r.istMusical || false;
+        }
+
+        (r.figuren || []).forEach(f => {
+          const key = (f.name || '').toLowerCase();
+          if (!figurenMap.has(key)) {
+            figurenMap.set(key, { ...f, _selected: true });
+          } else {
+            const existing = figurenMap.get(key);
+            Object.keys(f).forEach(k => {
+              if (f[k] && !existing[k]) existing[k] = f[k];
+            });
+          }
         });
-        
-        if (!response.ok) {
-          throw new Error('API-Fehler: ' + response.status);
+
+        (r.beziehungen || []).forEach(b => {
+          const key = [b.figur1, b.figur2].sort().join('↔').toLowerCase();
+          if (!bezSet.has(key)) {
+            bezSet.add(key);
+            merged.beziehungen.push(b);
+          }
+        });
+
+        (r.themen || []).forEach(t => themenSet.add(t));
+        merged.szenen.push(...(r.szenen || []));
+      });
+
+      merged.figuren = Array.from(figurenMap.values());
+      merged.themen = Array.from(themenSet);
+      return merged;
+    }
+
+    // Haupt-Orchestrator: KI-Import mit Wizard
+    async function doImportWithAI(text, apiKey) {
+      const analysisText = importedWordData?.richText || text;
+      const formatInfo = importedWordData?.formatInfo || {};
+      importFullText = text;
+
+      // Wizard auf "analyzing" setzen
+      importWizardStep = 'analyzing';
+      importAnalysis = null;
+      importProgress = { current: 0, total: 1, phase: 'Text wird vorbereitet...' };
+      render();
+
+      try {
+        const chunks = splitTextIntoChunks(analysisText);
+        importProgress.total = chunks.length;
+        const chunkResults = [];
+        const knownFiguren = [];
+
+        for (let i = 0; i < chunks.length; i++) {
+          importProgress.current = i + 1;
+          importProgress.phase = chunks.length > 1
+            ? `Abschnitt ${i + 1} von ${chunks.length}...`
+            : 'Figuren erkennen → Szenen extrahieren → Themen identifizieren...';
+          render();
+
+          const result = await analyzeChunk(chunks[i], i, chunks.length, knownFiguren, apiKey, formatInfo);
+          chunkResults.push(result);
+
+          // Bekannte Figuren für nächsten Chunk sammeln
+          (result.figuren || []).forEach(f => {
+            if (f.name && !knownFiguren.includes(f.name)) knownFiguren.push(f.name);
+          });
         }
-        
-        const data = await response.json();
-        const aiText = data.content[0].text;
-        
-        // JSON parsen
-        let analysis;
-        try {
-          const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-          analysis = JSON.parse(jsonMatch ? jsonMatch[0] : aiText);
-        } catch (e) {
-          console.error('JSON Parse Error:', aiText);
-          throw new Error('KI-Antwort konnte nicht verarbeitet werden.');
-        }
-        
-        statusText.textContent = 'Erstelle Projekt...';
-        applyAIAnalysis(analysis, text);
-        
+
+        importAnalysis = chunks.length > 1 ? mergeChunkResults(chunkResults) : chunkResults[0];
+        // Alle Figuren standardmässig ausgewählt
+        (importAnalysis.figuren || []).forEach(f => { if (f._selected === undefined) f._selected = true; });
+
+        importWizardStep = 'preview';
+        render();
+
       } catch (error) {
         console.error('KI-Import Fehler:', error);
-        status.style.display = 'none';
-        document.getElementById('import-word-btn').disabled = false;
-        const mergeBtn2 = document.getElementById('import-word-merge-btn');
-        if (mergeBtn2) mergeBtn2.disabled = false;
-        
+        importWizardStep = 'upload';
+        render();
         if (confirm('KI-Analyse fehlgeschlagen: ' + error.message + '\n\nOhne KI importieren?')) {
           doSimpleWordImport(importedWordData, false);
         }
       }
     }
-    
-    // KI-Analyse anwenden
-    function applyAIAnalysis(analysis, fullText) {
+
+    // Toggle Figur-Auswahl in Vorschau
+    function toggleImportFigur(index) {
+      if (importAnalysis?.figuren?.[index]) {
+        importAnalysis.figuren[index]._selected = !importAnalysis.figuren[index]._selected;
+        render();
+      }
+    }
+
+    // Wizard: Import ausführen (aus Vorschau-Schritt)
+    function executeWizardImport() {
+      if (!importAnalysis) return;
+      importWizardStep = 'importing';
+      render();
+
+      const analysis = importAnalysis;
+      const fullText = importFullText;
+
+      // Titel aus Input übernehmen
+      const titelInput = document.getElementById('wizard-titel-input');
+      if (titelInput) analysis.titel = titelInput.value.trim() || analysis.titel;
+
       // Projekt-Meta
       if (analysis.titel) state.projektMeta.titel = analysis.titel;
       if (analysis.untertitel) state.projektMeta.untertitel = analysis.untertitel;
@@ -11632,7 +11820,7 @@ ${analysisText.substring(0, 35000)}${analysisText.length > 35000 ? '\n[gekürzt]
       if (analysis.tagline) state.projektMeta.tagline = analysis.tagline;
       if (analysis.logline) state.projektMeta.logline = analysis.logline;
       if (analysis.strukturTyp) state.projektMeta.strukturTyp = analysis.strukturTyp;
-      
+
       // Projektname aktualisieren
       const projekte = load(KEYS.projekte, []);
       const idx = projekte.findIndex(p => p.id === state.projektId);
@@ -11640,26 +11828,32 @@ ${analysisText.substring(0, 35000)}${analysisText.length > 35000 ? '\n[gekürzt]
         projekte[idx].name = analysis.titel;
         save(KEYS.projekte, projekte);
       }
-      
-      // Figuren
-      state.figuren = (analysis.figuren || []).map(f => ({
-        id: genId(),
-        name: f.name || 'Unbenannt',
-        kuerzel: f.kuerzel || (f.name || '').substring(0, 2).toUpperCase(),
-        beschreibung: f.beschreibung || ''
-      }));
-      
+
+      // Figuren (nur ausgewählte)
+      state.figuren = (analysis.figuren || [])
+        .filter(f => f._selected !== false)
+        .map(f => ({
+          id: genId(),
+          name: f.name || 'Unbenannt',
+          kuerzel: f.kuerzel || (f.name || '').substring(0, FIGUR_ABBREV_LENGTH).toUpperCase(),
+          beschreibung: f.beschreibung || '',
+          beruf: f.beruf || '',
+          alter: f.alter || '',
+          geschlecht: f.geschlecht || '',
+          want: f.want || '',
+          need: f.need || '',
+          ghost: f.ghost || '',
+          archetyp: f.archetyp || ''
+        }));
+
       // Szenen
       state.szenen = [];
       state.textbuch = {};
-      
       const szenenDefs = analysis.szenen || [];
-      
+
       if (szenenDefs.length === 0) {
-        // Fallback
         const szene = {
-          id: genId(),
-          nummer: '1.1',
+          id: genId(), nummer: '1.1',
           titel: analysis.titel || 'Importiert',
           gruppe: state.projektMeta.eigeneGruppen?.[0] || 'Erster Akt',
           zusammenfassung: analysis.logline || '',
@@ -11671,20 +11865,22 @@ ${analysisText.substring(0, 35000)}${analysisText.length > 35000 ? '\n[gekürzt]
         szenenDefs.forEach((sDef, i) => {
           const szene = {
             id: genId(),
-            nummer: sDef.nummer || `${Math.floor(i/5)+1}.${(i%5)+1}`,
-            titel: sDef.titel || `Szene ${i+1}`,
+            nummer: sDef.nummer || `${Math.floor(i / 5) + 1}.${(i % 5) + 1}`,
+            titel: sDef.titel || `Szene ${i + 1}`,
             gruppe: sDef.gruppe || '1',
             ort: sDef.ort || '',
             zeit: sDef.zeit || '',
             zusammenfassung: sDef.zusammenfassung || '',
+            wendepunkt: sDef.wendepunkt || '',
+            spannungswert: sDef.spannungswert || 0,
             figuren: (sDef.figuren || []).map(fName => {
               const fig = state.figuren.find(f => f.name.toUpperCase() === fName.toUpperCase());
               return fig?.id;
             }).filter(Boolean)
           };
           state.szenen.push(szene);
-          
-          // Text-Zuordnung (vereinfacht)
+
+          // Text-Zuordnung
           let szeneText = '';
           if (sDef.textAnfang && fullText.includes(sDef.textAnfang.substring(0, 20))) {
             const startIdx = fullText.indexOf(sDef.textAnfang.substring(0, 20));
@@ -11696,26 +11892,132 @@ ${analysisText.substring(0, 35000)}${analysisText.length > 35000 ? '\n[gekürzt]
             }
             szeneText = fullText.substring(startIdx, endIdx);
           }
-          
           state.textbuch[szene.id] = formatImportedText(szeneText || `[Szene ${szene.nummer}]`);
         });
       }
-      
+
+      // Eigene Gruppen aus Szenen-Gruppen ableiten
+      const gruppenSet = new Set(state.szenen.map(s => s.gruppe).filter(Boolean));
+      if (gruppenSet.size > 0) {
+        state.projektMeta.eigeneGruppen = Array.from(gruppenSet).sort();
+      }
+
       state.aktiveSzene = state.szenen[0]?.id;
-      
       saveProjektDaten();
+
+      // Wizard zurücksetzen
+      importWizardStep = 'upload';
+      importAnalysis = null;
+      importFullText = '';
       closeModal('showImportModal');
       importedWordData = null;
       render();
-      
-      alert(`✅ KI-Import erfolgreich!
 
-📄 ${analysis.titel || 'Stück'}
-👤 ${state.figuren.length} Figuren erkannt
-🎬 ${state.szenen.length} Szenen erstellt
-🏛️ Struktur: ${analysis.strukturTyp || 'Frei'}
+      alert(`✅ KI-Import erfolgreich!\n\n📄 ${analysis.titel || 'Stück'}\n👤 ${state.figuren.length} Figuren erkannt\n🎬 ${state.szenen.length} Szenen erstellt\n🔗 ${(analysis.beziehungen || []).length} Beziehungen\n🎭 ${(analysis.themen || []).length} Themen\n🏛️ Struktur: ${analysis.strukturTyp || 'Frei'}\n\nPrüfe die Ergebnisse und passe sie bei Bedarf an.`);
+    }
 
-Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
+    // Wizard: Zurück zum Upload
+    function wizardBackToUpload() {
+      importWizardStep = 'upload';
+      importAnalysis = null;
+      render();
+    }
+
+    // Vorschau-Rendering für den Import-Wizard
+    function renderImportWizardPreview() {
+      if (!importAnalysis) return '';
+      const a = importAnalysis;
+      const figurenHtml = (a.figuren || []).map((f, i) => {
+        const archetypBadges = {
+          protagonist: '🌟', antagonist: '🔥', mentor: '🧙', ally: '🤝',
+          trickster: '🃏', shapeshifter: '🎭'
+        };
+        const badge = archetypBadges[f.archetyp] || '';
+        return `
+          <div style="display: flex; gap: 8px; padding: 8px; background: ${f._selected ? '#f0fdf4' : '#f9fafb'}; border: 1px solid ${f._selected ? '#bbf7d0' : '#e5e7eb'}; border-radius: 6px; cursor: pointer; opacity: ${f._selected ? 1 : 0.5};"
+               onclick="toggleImportFigur(${i})">
+            <input type="checkbox" ${f._selected ? 'checked' : ''} style="margin-top: 2px;" onclick="event.stopPropagation(); toggleImportFigur(${i})">
+            <div style="flex: 1; min-width: 0;">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <strong style="font-size: 13px;">${escapeHtml(f.name)}</strong>
+                ${f.beruf ? `<span style="font-size: 11px; color: #6b7280;">${escapeHtml(f.beruf)}</span>` : ''}
+                ${f.alter ? `<span style="font-size: 11px; color: #9ca3af;">${escapeHtml(f.alter)}</span>` : ''}
+                ${badge ? `<span title="${escapeHtml(f.archetyp)}">${badge}</span>` : ''}
+              </div>
+              ${f.beschreibung ? `<div style="font-size: 11px; color: #6b7280; margin-top: 2px;">${escapeHtml(f.beschreibung)}</div>` : ''}
+              <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
+                ${f.want ? `<span style="font-size: 10px; background: #dcfce7; color: #166534; padding: 1px 6px; border-radius: 10px;">🎯 ${escapeHtml(f.want.substring(0, 40))}</span>` : ''}
+                ${f.need ? `<span style="font-size: 10px; background: #fef9c3; color: #854d0e; padding: 1px 6px; border-radius: 10px;">💛 ${escapeHtml(f.need.substring(0, 40))}</span>` : ''}
+                ${f.ghost ? `<span style="font-size: 10px; background: #fce7f3; color: #9d174d; padding: 1px 6px; border-radius: 10px;">👻 ${escapeHtml(f.ghost.substring(0, 40))}</span>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+
+      const beziehungenHtml = (a.beziehungen || []).length > 0
+        ? `<div style="margin-top: 12px;">
+            <div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px;">🔗 Beziehungen</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+              ${(a.beziehungen || []).map(b => `<span style="font-size: 11px; background: #ede9fe; color: #5b21b6; padding: 2px 8px; border-radius: 10px;">${escapeHtml(b.figur1)} ↔ ${escapeHtml(b.figur2)}: ${escapeHtml(b.art)}</span>`).join('')}
+            </div>
+          </div>` : '';
+
+      const themenHtml = (a.themen || []).length > 0
+        ? `<div style="margin-top: 12px;">
+            <div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px;">🎭 Themen</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+              ${(a.themen || []).map(t => `<span style="font-size: 11px; background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 10px;">${escapeHtml(t)}</span>`).join('')}
+            </div>
+          </div>` : '';
+
+      const szenenHtml = (a.szenen || []).map((s, i) => {
+        const spBg = s.spannungswert > 7 ? '#fecaca' : s.spannungswert > 4 ? '#fef3c7' : '#d1fae5';
+        const spColor = s.spannungswert > 7 ? '#991b1b' : s.spannungswert > 4 ? '#92400e' : '#065f46';
+        return `
+          <div style="padding: 8px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;">
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <span style="font-size: 11px; color: #9ca3af; font-weight: 600;">${escapeHtml(s.nummer || String(i + 1))}</span>
+              <strong style="font-size: 13px;">${escapeHtml(s.titel || 'Szene ' + (i + 1))}</strong>
+              ${s.spannungswert ? `<span style="font-size: 10px; background: ${spBg}; color: ${spColor}; padding: 1px 6px; border-radius: 10px;">⚡ ${s.spannungswert}/10</span>` : ''}
+            </div>
+            ${(s.figuren || []).length > 0 ? `<div style="display: flex; gap: 3px; flex-wrap: wrap; margin-top: 4px;">${(s.figuren || []).map(f => `<span style="font-size: 10px; background: #e0e7ff; color: #3730a3; padding: 1px 6px; border-radius: 10px;">${escapeHtml(f)}</span>`).join('')}</div>` : ''}
+            ${s.ort || s.zeit ? `<div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">📍 ${escapeHtml(s.ort || '')}${s.ort && s.zeit ? ' · ' : ''}${s.zeit ? '🕐 ' + escapeHtml(s.zeit) : ''}</div>` : ''}
+            ${s.zusammenfassung ? `<div style="font-size: 11px; color: #6b7280; margin-top: 2px;">${escapeHtml(s.zusammenfassung)}</div>` : ''}
+            ${s.wendepunkt ? `<div style="font-size: 11px; color: #b45309; margin-top: 2px;">⚡ Wendepunkt: ${escapeHtml(s.wendepunkt)}</div>` : ''}
+            ${(s.cueHinweise || []).length > 0 ? `<div style="display: flex; gap: 3px; flex-wrap: wrap; margin-top: 4px;">${(s.cueHinweise || []).map(c => `<span style="font-size: 10px; background: #fef3c7; color: #92400e; padding: 1px 6px; border-radius: 10px;">💡 ${escapeHtml(c)}</span>`).join('')}</div>` : ''}
+          </div>`;
+      }).join('');
+
+      return `
+        <div style="max-height: 55vh; overflow-y: auto; padding-right: 4px;">
+          <!-- Titel -->
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 12px; font-weight: 600; color: #374151;">Titel</label>
+            <input type="text" id="wizard-titel-input" value="${escapeHtml(a.titel || '')}"
+                   style="width: 100%; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-weight: 600; margin-top: 4px;">
+          </div>
+
+          ${a.logline ? `<div style="font-size: 12px; color: #6b7280; margin-bottom: 12px; padding: 8px; background: #f0f9ff; border-radius: 6px;"><strong>Logline:</strong> ${escapeHtml(a.logline)}</div>` : ''}
+
+          <!-- Figuren -->
+          <div style="margin-bottom: 12px;">
+            <div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px;">👤 Figuren (${(a.figuren || []).filter(f => f._selected).length}/${(a.figuren || []).length} ausgewählt)</div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">${figurenHtml}</div>
+          </div>
+
+          ${beziehungenHtml}
+          ${themenHtml}
+
+          <!-- Szenen -->
+          <div style="margin-top: 12px;">
+            <div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px;">🎬 ${(a.szenen || []).length} Szenen</div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">${szenenHtml}</div>
+          </div>
+
+          <div style="margin-top: 12px; padding: 8px; background: #eff6ff; border-radius: 6px; font-size: 11px; color: #1e40af;">
+            ℹ️ Figuren, Szenen, Metadaten und Textbuch werden importiert. Vorhandene Daten werden ersetzt.
+          </div>
+        </div>`;
     }
     
     // Text für Editor formatieren (mit Marker-Unterstützung)
@@ -11969,7 +12271,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       const hasListen = hasCues || hasRequisiten || hasKostueme || hasBuehne;
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showExportModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showExportModal')">
           <div class="modal-content" style="max-width: 550px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">Exportieren</h2>
@@ -13277,7 +13579,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     function renderFassungModal() {
       const defaultName = `Fassung vom ${formatDateTime(new Date())}`;
       return `
-        <div class="modal-overlay" onclick="closeModal('showFassungModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showFassungModal')">
           <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">💾 Neue Fassung speichern</h2>
@@ -13328,7 +13630,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       const f = state.editingFigur || {};
       const isEdit = !!f.id;
       return `
-        <div class="modal-overlay" onclick="closeModal('showFigurModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showFigurModal')">
           <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">${isEdit ? '✏️ Figur bearbeiten' : '👤 Neue Figur'}</h2>
@@ -13389,7 +13691,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       const umbauAktionen = c.umbauAktionen || [];
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showCueModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showCueModal')">
           <div class="modal-content" style="max-width: 600px;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">${isEdit ? '✏️ Cue bearbeiten' : '💡 Neuer Cue'}</h2>
@@ -13647,7 +13949,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       const aktuelleGruppen = getAktuelleGruppen();
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showSzeneModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showSzeneModal')">
           <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">${isEdit ? '✏️ Szene bearbeiten' : '🎬 Neue Szene'}</h2>
@@ -13711,7 +14013,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       const maskeBilder = k.maskeBilder || (k.maskeBildId ? [k.maskeBildId] : []);
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showKostuemModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showKostuemModal')">
           <div class="modal-content" style="max-width: 750px;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">${isEdit ? '✏️ Kostüm bearbeiten' : '👗 Neues Kostüm'}</h2>
@@ -13870,7 +14172,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       const isEdit = !!b.id;
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showBuehneModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showBuehneModal')">
           <div class="modal-content" style="max-width: 700px;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">${isEdit ? '✏️ Bühnenelement bearbeiten' : '🎪 Neues Bühnenelement'}</h2>
@@ -13973,7 +14275,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       const isEdit = !!r.id;
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showRequisitenModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showRequisitenModal')">
           <div class="modal-content" style="max-width: 700px;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">${isEdit ? '✏️ Requisite bearbeiten' : '🎭 Neue Requisite'}</h2>
@@ -15349,7 +15651,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       if (!showCueExportDialog) return '';
       
       return `
-        <div class="modal-overlay" onclick="closeCueExportDialog()">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeCueExportDialog()">
           <div class="modal-content" style="max-width: 450px;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">📄 Cue-Listen exportieren</h2>
@@ -15792,7 +16094,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
           .filter(e => (e.rolleIds || []).includes(f.id))
           .map(e => e.name).join(', ') || '–';
         html += `<tr>
-          <td class="kuerzel">${f.kuerzel || (f.name || '').substring(0, 2).toUpperCase()}</td>
+          <td class="kuerzel">${f.kuerzel || (f.name || '').substring(0, FIGUR_ABBREV_LENGTH).toUpperCase()}</td>
           <td><strong>${f.name || 'Unbenannt'}</strong></td>
           <td>${f.beschreibung || '–'}</td>
           <td>${szenenNamen}</td>
@@ -16120,7 +16422,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
       projekte.sort((a, b) => new Date(b.geaendert || 0) - new Date(a.geaendert || 0));
       
       return `
-        <div class="modal-overlay" onclick="closeModal('showOeffnenModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showOeffnenModal')">
           <div class="modal-content" style="max-width: 600px; max-height: 85vh; overflow-y: auto;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">📂 Projekt öffnen</h2>
@@ -16194,7 +16496,7 @@ Prüfe die Ergebnisse und passe sie bei Bedarf an.`);
     // --- Sichern-Unter Modal ---
     function renderSichernUnterModal() {
       return `
-        <div class="modal-overlay" onclick="closeModal('showSichernUnterModal')">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showSichernUnterModal')">
           <div class="modal-content" style="max-width: 450px;" onclick="event.stopPropagation()">
             <div class="modal-header">
               <h2 class="text-lg font-semibold">💾 Sichern unter…</h2>
