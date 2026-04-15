@@ -2120,7 +2120,7 @@
       } catch { return null; }
     }
 
-    // Twin-Import durchführen (nutzt bestehende importFromDramera-Logik)
+    // Twin-Import durchführen (nutzt doImportNina für NINA-Exchange-Format)
     async function twinProcessIncoming(importData) {
       const source = importData.exportedFrom === 'werkbank' ? 'Dramera' : importData.exportedFrom;
       const figurenCount = (importData.figures || []).length;
@@ -2135,15 +2135,16 @@
       );
 
       if (accept) {
-        await importFromDramera(importData);
+        // NINA-Exchange-Format nutzt doImportNina() (nicht importFromDramera,
+        // die das alte Backup-Format mit data.figuren/data.felder erwartet)
+        ninaImportData = importData;
+        await doImportNina();
 
         localStorage.setItem(TWIN_SYNC_KEY, new Date().toISOString());
         localStorage.setItem(TWIN_DIR_KEY, 'dramera-to-rebu');
 
         // Bridge-Daten bereinigen
         localStorage.removeItem(TWIN_BRIDGE_KEY);
-
-        render();
       }
     }
 
