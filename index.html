@@ -1721,7 +1721,6 @@
     // =====================================================
     document.addEventListener('keydown', function(e) {
       var activeEl = document.activeElement;
-      console.log('[LEADER-DBG] KEYDOWN:', e.key, 'keyCode:', e.keyCode, 'target:', (activeEl ? activeEl.tagName + '.' + (activeEl.className || '').substring(0, 40) : 'null'), 'leaderActive:', _leaderActive);
       // Nur reagieren wenn ein Editor fokussiert ist
       var inEditor = activeEl && (
         activeEl.id === 'text-editor' ||
@@ -1732,7 +1731,6 @@
       // Esc-Taste
       if (e.key === 'Escape') {
         if (_leaderActive) {
-          console.log('[LEADER-DBG] ESC → cancel leader');
           e.preventDefault();
           e.stopPropagation();
           cancelLeader();
@@ -1740,23 +1738,19 @@
         }
         if (inEditor) {
           var anyModal = document.querySelector('.modal-overlay');
-          console.log('[LEADER-DBG] ESC in editor, modal found:', anyModal ? 'YES' : 'NONE');
           if (!anyModal) {
-            console.log('[LEADER-DBG] ESC → START LEADER');
             e.preventDefault();
             e.stopPropagation();
             startLeader();
             return;
           }
         } else {
-          console.log('[LEADER-DBG] ESC but NOT in editor, inEditor:', inEditor);
         }
         return;
       }
 
       // Folge-Taste wenn Leader aktiv
       if (_leaderActive) {
-        console.log('[LEADER-DBG] Follow-up key:', e.key, 'lkey:', e.key.toLowerCase(), 'isSceneEditor:', !!(activeEl && activeEl.id === 'text-editor'), 'applyFormat exists:', typeof applyFormat);
         e.preventDefault();
         e.stopPropagation();
         var lkey = e.key.toLowerCase();
@@ -1768,15 +1762,10 @@
 
         // Format-Tasten
         if (lkey in LEADER_MAP) {
-          console.log('[LEADER-DBG] Applying format:', lkey, '→', LEADER_MAP[lkey]);
           if (isSceneEditor && typeof applyFormat === 'function') {
             var fmt = LEADER_MAP[lkey];
-            if (fmt === 'figurenname') fmt = 'dialog';
-            console.log('[LEADER-DBG] Calling applyFormat("' + fmt + '") on scene editor');
             applyFormat(fmt);
-            console.log('[LEADER-DBG] applyFormat completed');
           } else if (isFliesstextEditor || inEditor) {
-            console.log('[LEADER-DBG] Using CSS class manipulation on fliesstext/contentEditable');
             // Direkte CSS-Klassen-Manipulation
             var fmtClassMap = {
               'f': 'format-dialog', 'd': 'format-dialog',
@@ -2144,6 +2133,7 @@
     // NINA-Exchange v4.0 erstellen (erweitert mit Rebu-spezifischen Daten)
     function createNinaExchangeV4() {
       return {
+        _app: 'nina-exchange',
         format: 'nina-exchange',
         version: '4.0',
         exportedFrom: 'rebu',
@@ -2384,7 +2374,7 @@
 
       const safeName = (state.projektMeta.titel || 'projekt').replace(/[^a-zA-Z0-9äöüÄÖÜß]/g, '_');
       const ts = new Date().toISOString().slice(0, 10);
-      const fileName = safeName + '_Twin_' + ts + '.nina.json';
+      const fileName = 'NINA_' + safeName + '_' + ts + '.nina.json';
       twinDownloadFile(JSON.stringify(exchangeData, null, 2), fileName);
 
       localStorage.setItem(TWIN_SYNC_KEY, new Date().toISOString());
@@ -3612,7 +3602,7 @@ was morgen kommt – wer ist dabei?</p>
         var url = URL.createObjectURL(content);
         var a = document.createElement('a');
         a.href = url;
-        a.download = projectName + '_Komplett-Backup_' + new Date().toISOString().slice(0, 10) + '.zip';
+        a.download = 'Rebu_Backup_' + projectName + '_' + new Date().toISOString().slice(0, 10) + '.zip';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -4428,6 +4418,7 @@ was morgen kommt – wer ist dabei?</p>
       }
       
       return {
+        _app: 'rebu',
         version: '3.0',
         exportDate: new Date().toISOString(),
         source: 'NINA-Rebu v3.0',
@@ -14108,7 +14099,9 @@ ${chunkText}`;
       delete ninaExport.twin;
 
       // Als JSON-Datei herunterladen
-      const fileName = makeExportFilename('NINA-Exchange', 'json');
+      const safeName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '').replace(/\s+/g, '_');
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const fileName = 'NINA_' + safeName + '_' + dateStr + '.nina.json';
       const content = JSON.stringify(ninaExport, null, 2);
 
       // UTF-8 BOM für bessere Kompatibilität
@@ -16821,7 +16814,7 @@ ${chunkText}`;
       const now = new Date();
       const datum = now.toISOString().slice(0, 10); // JJJJ-MM-TT
       const zeit = now.toTimeString().slice(0, 5).replace(':', '-'); // HH-MM
-      return `${name}_${typ}_${datum}_${zeit}.${ext}`;
+      return `Rebu_${name}_${datum}_${zeit}.${ext}`;
     }
     
     function downloadHTML(content, filename) {
@@ -16932,12 +16925,12 @@ ${chunkText}`;
           }
 
           // Erstmaliges Sichern → Picker öffnen
-          const filename = makeExportFilename('Backup', 'json');
+          const filename = makeExportFilename('Backup', 'rebu.json');
           savedFileHandle = await window.showSaveFilePicker({
             suggestedName: filename,
             types: [{
-              description: 'JSON Backup',
-              accept: { 'application/json': ['.json'] }
+              description: 'Rebu Projekt',
+              accept: { 'application/json': ['.rebu.json', '.json'] }
             }]
           });
           const writable = await savedFileHandle.createWritable();
@@ -16960,7 +16953,7 @@ ${chunkText}`;
           console.warn('File System Access API Fehler, Fallback auf Download:', err);
         }
       }
-      
+
       // Fallback für Safari/Firefox: Download wie bisher
       await downloadDrameraExport();
       state.dirty = false;
@@ -17049,12 +17042,15 @@ ${chunkText}`;
       // If called without an input element (e.g. from div onclick) and File System Access API is available
       if (window.showOpenFilePicker && (!input || !input.files)) {
         window.showOpenFilePicker({
-          types: [{ description: 'Rebu Projekt', accept: { 'application/json': ['.json'] } }]
+          types: [{ description: 'Rebu Projekt', accept: { 'application/json': ['.rebu.json', '.json'] } }]
         }).then(function(handles) {
           var handle = handles[0];
           return handle.getFile().then(function(file) {
             return file.text().then(function(text) {
               var data = JSON.parse(text);
+              if (data._app === 'dramera') {
+                if (!confirm('Diese Datei stammt aus Dramera. Möchtest du sie über das Exchange-Format importieren?')) return;
+              }
               importFromDramera(data);
               closeModal('showOeffnenModal');
               savedFileHandle = handle;
@@ -17079,6 +17075,9 @@ ${chunkText}`;
         reader.onload = function(e) {
           try {
             const data = JSON.parse(e.target.result);
+            if (data._app === 'dramera') {
+              if (!confirm('Diese Datei stammt aus Dramera. Möchtest du sie über das Exchange-Format importieren?')) return;
+            }
             importFromDramera(data);
             closeModal('showOeffnenModal');
             state.dirty = false;
@@ -17141,8 +17140,8 @@ ${chunkText}`;
         exportData.data.projektMeta.titelbild = await resolveTitelbildForExport(exportData.data.projektMeta.titelbild);
       }
       const json = JSON.stringify(exportData, null, 2);
-      const filename = makeExportFilename('Backup', 'json');
-      
+      const filename = makeExportFilename('Backup', 'rebu.json');
+
       const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -17174,12 +17173,12 @@ ${chunkText}`;
       // File System Access API verfügbar? → Immer neuen Picker
       if (window.showSaveFilePicker) {
         try {
-          const filename = makeExportFilename('Backup', 'json');
+          const filename = makeExportFilename('Backup', 'rebu.json');
           savedFileHandle = await window.showSaveFilePicker({
             suggestedName: filename,
             types: [{
-              description: 'JSON Backup',
-              accept: { 'application/json': ['.json'] }
+              description: 'Rebu Projekt',
+              accept: { 'application/json': ['.rebu.json', '.json'] }
             }]
           });
           const writable = await savedFileHandle.createWritable();
