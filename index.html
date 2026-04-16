@@ -1775,6 +1775,19 @@
         var isSceneEditor = activeEl && activeEl.id === 'text-editor';
         var isFliesstextEditor = activeEl && activeEl.classList.contains('fliesstext-editor');
 
+        // DEBUG: Folge-Taste
+        var dbg2 = document.createElement('div');
+        dbg2.style.cssText = 'position:fixed;top:8px;right:8px;background:#000;color:#ff0;padding:8px 12px;border-radius:6px;font-size:11px;font-family:monospace;z-index:99999;white-space:pre;max-width:500px;';
+        dbg2.textContent = '[LEADER-DBG] Follow-up: "' + lkey + '"\n'
+          + 'in LEADER_MAP: ' + (lkey in LEADER_MAP) + '\n'
+          + 'isSceneEditor: ' + isSceneEditor + '\n'
+          + 'isFliesstextEditor: ' + isFliesstextEditor + '\n'
+          + 'inEditor: ' + inEditor + '\n'
+          + 'applyFormat exists: ' + (typeof applyFormat === 'function') + '\n'
+          + 'mapped to: ' + (LEADER_MAP[lkey] || 'N/A');
+        document.body.appendChild(dbg2);
+        setTimeout(function(){ dbg2.remove(); }, 4000);
+
         // Format-Tasten
         if (lkey in LEADER_MAP) {
           if (isSceneEditor && typeof applyFormat === 'function') {
