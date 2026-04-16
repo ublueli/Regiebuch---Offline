@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="app-build" content="rebu-2026-04-16T2">
+  <meta name="app-build" content="rebu-2026-04-16T3">
   <title>N!NA-Rebu v2.4 - Regiebuch mit KI (NINA-Exchange v2.0, Stand-alone)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
@@ -1745,12 +1745,19 @@
           if (!anyModal) {
             e.preventDefault();
             e.stopPropagation();
-            // Save editor context so follow-up key works even if focus shifts
+            // Save editor context + selection node (Chrome clears selection on Esc blur)
+            var savedNode = null;
+            var sel0 = window.getSelection();
+            if (sel0 && sel0.rangeCount > 0) {
+              savedNode = sel0.anchorNode;
+              while (savedNode && savedNode !== activeEl && savedNode.parentNode !== activeEl) savedNode = savedNode.parentNode;
+            }
             startLeader({
               isSceneEditor: isSceneEditor,
               isFliesstextEditor: isFliesstextEditor,
               inEditor: inEditor,
-              activeEl: activeEl
+              activeEl: activeEl,
+              savedNode: savedNode
             });
             return;
           }
@@ -1766,15 +1773,16 @@
         var ctx = _leaderContext || {};
         var ctxIsScene = ctx.isSceneEditor;
         var ctxIsFliesstext = ctx.isFliesstextEditor;
-        var ctxInEditor = ctx.inEditor;
         var ctxActiveEl = ctx.activeEl;
+        var ctxNode = ctx.savedNode;
         cancelLeader();
 
         // Format-Tasten
         if (lkey in LEADER_MAP) {
           if (ctxIsScene && typeof applyFormat === 'function') {
             applyFormat(LEADER_MAP[lkey]);
-          } else if ((ctxIsFliesstext || ctxInEditor) && ctxActiveEl) {
+          } else if ((ctxIsFliesstext || ctx.inEditor) && ctxNode && ctxNode.classList) {
+            // Use saved node (Chrome clears selection when Esc blurs contentEditable)
             var fmtClassMap = {
               'f': 'format-figurenname', 'd': 'format-dialog',
               'r': 'format-regieanweisung', 't': 'format-szene-titel',
@@ -1782,15 +1790,8 @@
               'v': 'format-vers', 'p': 'format-pause', 'n': 'format-standard'
             };
             if (lkey in fmtClassMap) {
-              var sel = window.getSelection();
-              if (sel && sel.rangeCount > 0) {
-                var node = sel.anchorNode;
-                while (node && node !== ctxActiveEl && node.parentNode !== ctxActiveEl) node = node.parentNode;
-                if (node && node.classList) {
-                  Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
-                  node.classList.add(fmtClassMap[lkey]);
-                }
-              }
+              Array.from(ctxNode.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { ctxNode.classList.remove(c); });
+              ctxNode.classList.add(fmtClassMap[lkey]);
             }
           }
           showFormatToast('Format: ' + (FORMAT_NAMEN[LEADER_MAP[lkey]] || lkey));
@@ -1798,17 +1799,10 @@
         }
 
         // K = Format kopieren
-        if (lkey === 'k' && ctxActiveEl) {
-          var sel = window.getSelection();
-          if (sel && sel.rangeCount > 0) {
-            var node = sel.anchorNode;
-            while (node && node !== ctxActiveEl && node.parentNode !== ctxActiveEl) node = node.parentNode;
-            if (node && node.classList) {
-              var fmtClass = Array.from(node.classList).find(function(c) { return c.startsWith('format-'); });
-              _copiedFormat = fmtClass || null;
-              showFormatToast('Format kopiert: ' + (fmtClass ? fmtClass.replace('format-', '') : 'Standard'));
-            }
-          }
+        if (lkey === 'k' && ctxNode && ctxNode.classList) {
+          var fmtClass = Array.from(ctxNode.classList).find(function(c) { return c.startsWith('format-'); });
+          _copiedFormat = fmtClass || null;
+          showFormatToast('Format kopiert: ' + (fmtClass ? fmtClass.replace('format-', '') : 'Standard'));
           return;
         }
 
@@ -1823,16 +1817,9 @@
               'format-vers': 'vers', 'format-pause': 'pause', 'format-standard': 'standard'
             };
             applyFormat(fmtMap[_copiedFormat] || 'standard');
-          } else if (ctxActiveEl) {
-            var sel = window.getSelection();
-            if (sel && sel.rangeCount > 0) {
-              var node = sel.anchorNode;
-              while (node && node !== ctxActiveEl && node.parentNode !== ctxActiveEl) node = node.parentNode;
-              if (node && node.classList) {
-                Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
-                node.classList.add(_copiedFormat);
-              }
-            }
+          } else if (ctxNode && ctxNode.classList) {
+            Array.from(ctxNode.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { ctxNode.classList.remove(c); });
+            ctxNode.classList.add(_copiedFormat);
           }
           showFormatToast('Format angewendet: ' + _copiedFormat.replace('format-', ''));
           return;
