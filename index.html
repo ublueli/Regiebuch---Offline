@@ -1729,6 +1729,20 @@
         activeEl.isContentEditable
       );
 
+      // DEBUG: Sichtbare Anzeige bei Esc (wird nach Diagnose entfernt)
+      if (e.key === 'Escape') {
+        var dbg = document.createElement('div');
+        dbg.style.cssText = 'position:fixed;top:8px;left:8px;background:#000;color:#0f0;padding:8px 12px;border-radius:6px;font-size:11px;font-family:monospace;z-index:99999;white-space:pre;max-width:500px;';
+        dbg.textContent = '[LEADER-DBG] Esc pressed\n'
+          + 'activeEl: ' + (activeEl ? activeEl.tagName + '#' + (activeEl.id||'') + '.' + (activeEl.className||'').substring(0,40) : 'null') + '\n'
+          + 'isContentEditable: ' + (activeEl ? activeEl.isContentEditable : 'N/A') + '\n'
+          + 'inEditor: ' + inEditor + '\n'
+          + 'leaderActive: ' + _leaderActive + '\n'
+          + 'modal-overlay found: ' + !!document.querySelector('.modal-overlay');
+        document.body.appendChild(dbg);
+        setTimeout(function(){ dbg.remove(); }, 4000);
+      }
+
       // Esc-Taste
       if (e.key === 'Escape') {
         if (_leaderActive) {
