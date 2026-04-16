@@ -9,6 +9,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <!-- Supabase entfernt für Stand-alone Version -->
   <script>
     // PDF.js Worker konfigurieren
@@ -261,7 +262,8 @@
       margin: 0.35rem 0;
       text-indent: 0;
       font-family: 'Trebuchet MS', 'Segoe UI', sans-serif !important;
-      font-size: 12pt !important;
+      font-size: 11pt !important;
+      line-height: 1.3 !important;
       color: #212121 !important;
     }
     
@@ -270,10 +272,11 @@
     
     /* Dialog: FIGURENNAME oben, Text darunter eingerückt (wie Word-Export) */
     .format-dialog {
-      margin: 0.6rem 0 0.2rem 0;
+      margin: 0 0 0.2rem 0;
       display: block;
       font-family: 'Trebuchet MS', 'Segoe UI', sans-serif !important;
-      font-size: 12pt !important;
+      font-size: 11pt !important;
+      line-height: 1.1 !important;
       color: #212121 !important;
     }
     
@@ -282,25 +285,30 @@
       font-weight: bold;
       white-space: nowrap;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      font-size: 10.5pt !important;
+      letter-spacing: 0.03em;
+      font-size: 10pt !important;
+      line-height: 1.2 !important;
       margin-bottom: 0.1rem;
+      margin-top: 5pt;
     }
     
     .format-dialog .dialog-text {
       display: block;
       font-weight: normal;
       margin-left: 0.5cm;
+      margin-bottom: 6pt;
     }
     
     /* Regieanweisung: Georgia, kursiv, stark eingerückt (wie Word-Export) */
     .format-regieanweisung {
       font-family: Georgia, 'Times New Roman', serif !important;
-      font-size: 11pt !important;
+      font-size: 10pt !important;
       font-style: italic !important;
       color: #414141 !important;
-      margin: 0.4rem 0;
-      margin-left: 6cm;
+      margin-top: 3pt;
+      margin-bottom: 7pt;
+      margin-left: 4cm;
+      line-height: 1.3 !important;
     }
     
     /* Szenen-Titel: Georgia, fett, zentriert, Abstand */
@@ -309,8 +317,9 @@
       font-weight: bold !important;
       font-size: 12pt !important;
       text-align: center;
-      margin-top: 2rem;
-      margin-bottom: 2rem;
+      margin-top: 24pt;
+      margin-bottom: 12pt;
+      line-height: 1.3 !important;
       color: #212121;
     }
     
@@ -319,8 +328,9 @@
       font-family: 'Trebuchet MS', 'Segoe UI', sans-serif !important;
       font-style: italic !important;
       font-size: 11pt !important;
-      margin: 0.15rem 0;
-      margin-left: 2cm;
+      margin-top: 0;
+      margin-bottom: 3pt;
+      margin-left: 0.5cm;
       color: #212121 !important;
       line-height: 1.3 !important;
     }
@@ -340,15 +350,17 @@
     /* Akt-/Struktur-Titel: zentriert, Versalien, Linien */
     .format-akt-titel {
       font-family: 'Trebuchet MS', 'Segoe UI', sans-serif !important;
-      font-size: 11pt !important;
+      font-size: 18pt !important;
       font-weight: bold;
       text-align: center;
       text-transform: uppercase;
       letter-spacing: 0.2em;
-      margin: 2.5rem 0 1rem;
+      margin-top: 30pt;
+      margin-bottom: 12pt;
       padding: 0.8rem 0;
       border-top: 2px solid #374151;
       border-bottom: 2px solid #374151;
+      line-height: 1.2 !important;
       color: #212121;
     }
     
@@ -360,8 +372,10 @@
       text-align: center;
       text-transform: uppercase;
       letter-spacing: 0.3em;
-      margin: 2.5rem 0;
+      margin-top: 24pt;
+      margin-bottom: 24pt;
       padding: 0.75rem 0;
+      line-height: 1.2 !important;
       color: #888888;
     }
     
@@ -370,9 +384,9 @@
       font-family: Georgia, 'Times New Roman', serif !important;
       font-style: italic !important;
       color: #414141 !important;
-      font-size: 0.92em !important;
+      font-size: 10pt !important;
     }
-    
+
     /* Gestrichen (v1.2) */
     .format-gestrichen {
       text-decoration: line-through;
@@ -390,10 +404,11 @@
     /* Musik-Einsatz (v1.5) 🎼 */
     .format-musik {
       font-family: Georgia, 'Times New Roman', serif !important;
-      font-size: 11pt !important;
+      font-size: 10pt !important;
       font-style: italic !important;
-      margin: 0.6rem 0;
-      margin-left: 8.5rem;
+      margin-top: 3pt;
+      margin-bottom: 7pt;
+      margin-left: 4cm;
       padding: 6pt 10pt;
       line-height: 1.4;
       color: #7c3aed !important;
@@ -404,10 +419,11 @@
     /* Sound-Effekt (v1.5) 🔊 */
     .format-sound {
       font-family: Georgia, 'Times New Roman', serif !important;
-      font-size: 11pt !important;
+      font-size: 10pt !important;
       font-style: italic !important;
-      margin: 0.6rem 0;
-      margin-left: 8.5rem;
+      margin-top: 3pt;
+      margin-bottom: 7pt;
+      margin-left: 4cm;
       padding: 6pt 10pt;
       line-height: 1.4;
       color: #059669 !important;
@@ -1143,6 +1159,7 @@
       ensemble: (id) => `${STORAGE_PREFIX}ensemble_${id}`,
       team: (id) => `${STORAGE_PREFIX}team_${id}`,
       probeplan: (id) => `${STORAGE_PREFIX}probeplan_${id}`,
+      lastSaved: STORAGE_PREFIX + 'last_saved',
     };
 
     // ============================================
@@ -1611,10 +1628,118 @@
     // ============================================
     // FORMATVORLAGEN DEFINITION
     // ============================================
+    // === FORMAT-ÜBERTRAGEN (Cmd+Alt+C / Cmd+Alt+V) ===
+    let _copiedFormat = null;
+
+    function showFormatToast(text) {
+      const existing = document.getElementById('format-toast');
+      if (existing) existing.remove();
+      const toast = document.createElement('div');
+      toast.id = 'format-toast';
+      toast.textContent = text;
+      toast.style.cssText = 'position:fixed;bottom:80px;right:16px;background:rgba(30,30,30,0.92);color:#d1d5db;padding:8px 16px;border-radius:8px;font-size:12px;z-index:10000;box-shadow:0 4px 12px rgba(0,0,0,0.3);pointer-events:none;transition:opacity 0.3s;';
+      document.body.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; }, 1500);
+      setTimeout(() => { toast.remove(); }, 1800);
+    }
+
+    // =====================================================
+    // LEADER-KEY PATTERN FÜR FORMATVORLAGEN
+    // =====================================================
+    var _leaderActive = false;
+    var _leaderTimer = null;
+
+    var LEADER_MAP = {
+      'f': 'figurenname', 'd': 'dialog', 'r': 'regieanweisung',
+      't': 'szeneTitel', 'a': 'aktTitel', 'l': 'lied',
+      'v': 'vers', 'p': 'pause', 'n': 'standard'
+    };
+
+    var FORMAT_NAMEN = {
+      figurenname: 'Figurenname', dialog: 'Dialog', regieanweisung: 'Regieanweisung',
+      szeneTitel: 'Szenen-Titel', aktTitel: 'Akt-Titel', lied: 'Lied',
+      vers: 'Vers', pause: 'Pause', standard: 'Standard'
+    };
+
+    function showLeaderPopup() {
+      var existing = document.getElementById('leader-popup');
+      if (existing) existing.remove();
+      var popup = document.createElement('div');
+      popup.id = 'leader-popup';
+      popup.style.cssText = 'position:fixed;bottom:16px;right:16px;background:rgba(24,24,27,0.95);color:#e5e7eb;padding:12px 16px;border-radius:10px;font-size:12px;z-index:10000;box-shadow:0 4px 16px rgba(0,0,0,0.4);pointer-events:none;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;min-width:220px;';
+      var title = '<div style="font-weight:600;margin-bottom:8px;color:#93c5fd;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Formatvorlage wählen…</div>';
+      var grid = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 16px;">';
+      var items = [
+        ['F', 'Figurenname'], ['D', 'Dialog'], ['R', 'Regieanweisung'],
+        ['T', 'Szenen-Titel'], ['A', 'Akt-Titel'], ['L', 'Lied'],
+        ['V', 'Versmaß'], ['P', 'Pause'], ['N', 'Standard'],
+        ['K', 'Kopieren'], ['E', 'Einfügen']
+      ];
+      for (var i = 0; i < items.length; i++) {
+        grid += '<div><span style="color:#fbbf24;font-weight:700;margin-right:6px;">' + items[i][0] + '</span><span style="color:#d1d5db;">' + items[i][1] + '</span></div>';
+      }
+      grid += '</div>';
+      var footer = '<div style="margin-top:8px;font-size:10px;color:#6b7280;">Esc = Abbrechen</div>';
+      popup.innerHTML = title + grid + footer;
+      document.body.appendChild(popup);
+    }
+
+    function hideLeaderPopup() {
+      var popup = document.getElementById('leader-popup');
+      if (popup) popup.remove();
+    }
+
+    function cancelLeader() {
+      _leaderActive = false;
+      if (_leaderTimer) { clearTimeout(_leaderTimer); _leaderTimer = null; }
+      hideLeaderPopup();
+    }
+
+    function startLeader() {
+      // Don't start if a modal is open
+      var overlays = document.querySelectorAll('.modal-overlay');
+      for (var i = 0; i < overlays.length; i++) {
+        if (overlays[i].offsetParent !== null || overlays[i].style.display !== 'none') {
+          // Check if it's actually visible (rendered in DOM and not hidden)
+          if (overlays[i].closest('[style*="display: none"]') === null && overlays[i].closest('[style*="display:none"]') === null) {
+            return;
+          }
+        }
+      }
+      _leaderActive = true;
+      if (_leaderTimer) clearTimeout(_leaderTimer);
+      _leaderTimer = setTimeout(function() {
+        cancelLeader();
+        showFormatToast('Leader-Modus abgelaufen');
+      }, 1500);
+      showLeaderPopup();
+    }
+
+    // =====================================================
+    // ZENTRALE FORMAT-DEFINITIONEN (Pages "Die Vollmacht")
+    // Alle Modi und Exporte greifen auf diese Werte zu.
+    // =====================================================
+    const THEATER_FORMATE = {
+      figurenname: { font: 'Trebuchet MS', size: 10, bold: true, italic: false, allCaps: true, letterSpacing: 0.03, indent: 0, align: 'left', spacingBefore: 5, spacingAfter: 1, lineHeight: 1.2, color: '212121' },
+      dialog:      { font: 'Trebuchet MS', size: 11, bold: false, italic: false, allCaps: false, indent: 0.5, align: 'left', spacingBefore: 0, spacingAfter: 6, lineHeight: 1.1, color: '212121' },
+      regieanweisung: { font: 'Georgia', size: 10, bold: false, italic: true, allCaps: false, indent: 4, align: 'left', spacingBefore: 3, spacingAfter: 7, lineHeight: 1.3, color: '414141' },
+      inlineRegie: { font: 'Georgia', size: 10, bold: false, italic: true, color: '414141' },
+      szeneTitel:  { font: 'Georgia', size: 12, bold: true, italic: false, allCaps: false, indent: 0, align: 'center', spacingBefore: 24, spacingAfter: 12, lineHeight: 1.3, color: '212121' },
+      aktTitel:    { font: 'Trebuchet MS', size: 18, bold: true, italic: false, allCaps: true, letterSpacing: 0.2, indent: 0, align: 'center', spacingBefore: 30, spacingAfter: 12, lineHeight: 1.2, color: '212121' },
+      lied:        { font: 'Trebuchet MS', size: 11, bold: false, italic: true, allCaps: false, indent: 0.5, align: 'left', spacingBefore: 0, spacingAfter: 3, lineHeight: 1.3, color: '212121' },
+      vers:        { font: 'Trebuchet MS', size: 11, bold: false, italic: true, allCaps: false, indent: 0.5, align: 'left', spacingBefore: 0, spacingAfter: 3, lineHeight: 1.3, color: '212121' },
+      pause:       { font: 'Trebuchet MS', size: 12, bold: true, italic: false, allCaps: true, letterSpacing: 0.3, indent: 0, align: 'center', spacingBefore: 24, spacingAfter: 24, lineHeight: 1.2, color: '888888' },
+      musik:       { font: 'Georgia', size: 10, bold: false, italic: true, indent: 4, align: 'left', spacingBefore: 3, spacingAfter: 7, lineHeight: 1.4, color: '7c3aed' },
+      sound:       { font: 'Georgia', size: 10, bold: false, italic: true, indent: 4, align: 'left', spacingBefore: 3, spacingAfter: 7, lineHeight: 1.4, color: '059669' },
+      notiz:       { font: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif', size: 10, bold: false, italic: true, color: '92400e' },
+      nebentext:   { font: 'Georgia', size: 10, bold: false, italic: true, indent: 0, align: 'left', spacingBefore: 3, spacingAfter: 6, lineHeight: 1.4, color: '6b7280' },
+      standard:    { font: 'Trebuchet MS', size: 11, bold: false, italic: false, indent: 0, align: 'left', spacingBefore: 0, spacingAfter: 6, lineHeight: 1.3, color: '212121' },
+    };
+
     const FORMATVORLAGEN = {
-      standard: { 
-        name: 'Standard', 
-        class: 'format-standard', 
+      standard: {
+        name: 'Standard',
+        class: 'format-standard',
         description: 'Normaler Text',
         icon: '¶'
       },
@@ -1762,6 +1887,8 @@
       konzeptTab: 'treatment',  // 'treatment' | 'fundament' | 'werte' | 'motive'
       teamProbenTab: 'ensemble', // 'ensemble' | 'team' | 'probeplan'
       dirty: false, // true wenn ungespeicherte Änderungen seit letztem Export/Backup
+      filePath: null,        // display name of the currently linked file
+      lastFileSaveTime: null, // Date of last successful file save
       referenzFassungId: null, // ID der Fassung für Änderungsverfolgung
       showGestrichenes: true,
       selectedFormat: 'dialog',
@@ -3097,6 +3224,7 @@ was morgen kommt – wer ist dabei?</p>
       if (gruppenChanged) saveProjektDaten();
       
       state.dirty = false; // Frisch geladen, keine ungespeicherten Änderungen
+      updateHeaderStatus();
     }
     
     // v2.0: Aktuelle Gruppen des Projekts holen (eigene + aus Szenen extrahierte)
@@ -3218,7 +3346,10 @@ was morgen kommt – wer ist dabei?</p>
       
       const failCount = results.filter(r => !r).length;
       const allOk = failCount === 0;
-      
+
+      // Zeitstempel für Crash Recovery
+      try { localStorage.setItem(KEYS.lastSaved, new Date().toISOString()); } catch(e) {}
+
       // Autosave-Indikator — ehrliches Feedback
       showAutosaveIndicator(allOk);
       
@@ -3235,7 +3366,11 @@ was morgen kommt – wer ist dabei?</p>
       
       // v2.2: Auto-Sync zur Cloud (wenn Cloud-Projekt)
       scheduleSyncToCloud();
-      
+
+      // Auto-file-save & save reminder
+      scheduleAutoFileSave();
+      startSaveReminder();
+
       return allOk;
     }
     
@@ -3258,31 +3393,171 @@ was morgen kommt – wer ist dabei?</p>
       }
     }
     
+    // ============================================
+    // CRASH RECOVERY
+    // ============================================
+    function checkCrashRecovery() {
+      try {
+        var lastSaved = localStorage.getItem(KEYS.lastSaved);
+        if (!lastSaved) return;
+        var savedTime = new Date(lastSaved);
+        var now = new Date();
+        var diffMs = now - savedTime;
+        // Nur anzeigen wenn letzte Speicherung weniger als 7 Tage alt
+        if (diffMs > 7 * 24 * 60 * 60 * 1000) return;
+        // Prüfen ob es ungesicherte Änderungen gibt (dirty flag oder kein File-Save)
+        if (!state.dirty && state.filePath) return;
+        // Wenn kein filePath gesetzt, aber Daten vorhanden — möglicher Crash
+        if (!state.filePath && state.szenen && state.szenen.length > 0) {
+          // Daten vorhanden, aber nie in Datei gesichert
+          showRecoveryDialog(savedTime);
+        }
+      } catch(e) {
+        console.warn('Crash Recovery Check fehlgeschlagen:', e);
+      }
+    }
+
+    function showRecoveryDialog(savedTime) {
+      var overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:20000;display:flex;align-items:center;justify-content:center;';
+      var dialog = document.createElement('div');
+      dialog.style.cssText = 'background:white;border-radius:12px;padding:1.5rem;max-width:450px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3);';
+      var timeStr = new Date(savedTime).toLocaleString('de-DE');
+      dialog.innerHTML = '<h3 style="margin:0 0 1rem;font-size:1.1rem;">\u{1F504} Ungespeicherte \u00c4nderungen gefunden</h3>' +
+        '<p style="color:#555;font-size:0.9rem;">Im Browser wurden \u00c4nderungen vom <strong>' + timeStr + '</strong> gefunden, die m\u00f6glicherweise nicht gesichert wurden.</p>' +
+        '<p style="color:#555;font-size:0.85rem;margin-top:0.5rem;">Die Daten sind bereits geladen. M\u00f6chtest du sie jetzt als Datei sichern?</p>' +
+        '<div style="display:flex;gap:0.75rem;margin-top:1.5rem;justify-content:flex-end;">' +
+          '<button id="recovery-ignore" style="padding:0.5rem 1rem;border:1px solid #d1d5db;border-radius:6px;background:white;cursor:pointer;">Ignorieren</button>' +
+          '<button id="recovery-backup" style="padding:0.5rem 1rem;border:none;border-radius:6px;background:#6b4423;color:white;cursor:pointer;font-weight:600;">Jetzt sichern</button>' +
+        '</div>';
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+      document.getElementById('recovery-ignore').onclick = function() { overlay.remove(); };
+      document.getElementById('recovery-backup').onclick = function() {
+        overlay.remove();
+        sichernProjekt();
+      };
+    }
+
+    // ============================================
+    // MANUELLES BACKUP
+    // ============================================
+    function manuellesBackupErstellen() {
+      var name = 'Manuelles Backup ' + new Date().toLocaleString('de-DE');
+      neueFassungSpeichern(name, 'manuell');
+      alert('Backup-Fassung erstellt: ' + name);
+    }
+
+    // ============================================
+    // ZIP EXPORT
+    // ============================================
+    function exportAsZip() {
+      if (typeof JSZip === 'undefined') { alert('JSZip nicht geladen. Bitte Seite neu laden.'); return; }
+      var zip = new JSZip();
+      var projectName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '').replace(/\s+/g, '_');
+
+      // 1. Aktuelles Projekt als .rebu.json
+      saveCurrentText(true);
+      flushPendingSave();
+      var exportData = exportToDramera();
+      zip.file(projectName + '.rebu.json', JSON.stringify(exportData, null, 2));
+
+      // 2. Versionsverlauf
+      if (state.fassungen && state.fassungen.length > 0) {
+        var versionsFolder = zip.folder('Versionsverlauf');
+        state.fassungen.forEach(function(v, i) {
+          var ts = new Date(v.datum || v.timestamp || Date.now()).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          versionsFolder.file('Version_' + (i + 1) + '_' + ts + '.json', JSON.stringify(v, null, 2));
+        });
+      }
+
+      // 3. NINA Exchange
+      var exchangeData = createNinaExchangeV4();
+      zip.file(projectName + '.nina-exchange.json', JSON.stringify(exchangeData, null, 2));
+
+      // Generieren und herunterladen
+      zip.generateAsync({ type: 'blob' }).then(function(content) {
+        var url = URL.createObjectURL(content);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = projectName + '_Komplett-Backup_' + new Date().toISOString().slice(0, 10) + '.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+    }
+
     let autosaveTimeout = null;
     function showAutosaveIndicator(success = true) {
-      const el = document.getElementById('autosave-indicator');
-      if (!el) return;
-      const now = new Date();
-      const time = now.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
-      
-      if (success) {
-        el.textContent = '✓ ' + time;
-        el.style.color = '#16a34a';
-      } else {
-        el.textContent = '⚠ FEHLER ' + time;
-        el.style.color = '#dc2626';
-        el.style.fontWeight = 'bold';
+      if (!success) {
+        // On error, show error directly in the indicator
+        const el = document.getElementById('autosave-indicator');
+        if (!el) return;
+        const now = new Date();
+        const time = now.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
+        el.innerHTML = '<span style="color:#dc2626;font-weight:bold;">⚠ FEHLER ' + time + '</span>';
+        if (autosaveTimeout) clearTimeout(autosaveTimeout);
+        autosaveTimeout = setTimeout(() => {
+          if (el) el.style.fontWeight = 'normal';
+        }, 3000);
+        return;
       }
-      
-      if (autosaveTimeout) clearTimeout(autosaveTimeout);
-      autosaveTimeout = setTimeout(() => {
-        if (el) {
-          el.style.color = success ? '#9ca3af' : '#dc2626'; // Fehler bleibt rot sichtbar
-          el.style.fontWeight = 'normal';
+      // On success, use the unified header status display
+      updateHeaderStatus();
+    }
+
+    function updateHeaderStatus() {
+      const indicator = document.getElementById('autosave-indicator');
+      if (!indicator) return;
+
+      const parts = [];
+      if (state.filePath) {
+        parts.push('\u{1F4C4} ' + state.filePath);
+        if (state.dirty) {
+          parts.push('<span style="color:#e8a838"> \u25CF Bearbeitet</span>');
+        } else if (state.lastFileSaveTime) {
+          const t = state.lastFileSaveTime.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+          parts.push('<span style="color:#4a9"> \u2713 ' + t + '</span>');
         }
-      }, 3000);
+      } else {
+        parts.push('Nur im Browser');
+        if (state.dirty) {
+          parts.push('<span style="color:#e8a838"> \u25CF Nicht gesichert</span>');
+        } else {
+          const now = new Date();
+          const time = now.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
+          parts.push('<span style="color:#9ca3af"> \u2713 ' + time + '</span>');
+        }
+      }
+      indicator.innerHTML = parts.join('');
     }
     
+    // --- Auto-File-Save (throttled, 30s after last localStorage save) ---
+    var _autoFileSaveTimer = null;
+    function scheduleAutoFileSave() {
+      if (!savedFileHandle || !state.dirty) return;
+      if (_autoFileSaveTimer) return; // already scheduled
+      _autoFileSaveTimer = setTimeout(function() {
+        _autoFileSaveTimer = null;
+        if (savedFileHandle && state.dirty) {
+          sichernProjekt(); // silent save to file
+        }
+      }, 30000);
+    }
+
+    // --- Save Reminder for new documents without a file handle ---
+    var _saveReminderTimer = null;
+    function startSaveReminder() {
+      if (_saveReminderTimer) clearTimeout(_saveReminderTimer);
+      if (savedFileHandle) return; // already has a file
+      _saveReminderTimer = setTimeout(function() {
+        if (!savedFileHandle && state.dirty) {
+          showFormatToast('Tipp: Drücke \u2318S um dein Projekt als Datei zu sichern');
+        }
+      }, 300000); // 5 minutes
+    }
+
     // ============================================
     // PROJEKT-VERWALTUNG (NEU v1.4)
     // ============================================
@@ -4090,19 +4365,25 @@ was morgen kommt – wer ist dabei?</p>
     // ============================================
     // FASSUNGS-VERWALTUNG (v1.2: mit Uhrzeit)
     // ============================================
-    function neueFassungSpeichern(name) {
+    function neueFassungSpeichern(name, source) {
       saveCurrentText(true); // WICHTIG: Aktuellen Editor-Inhalt sichern
+      var fassungSource = source || 'manuell';
       const now = new Date();
       const fassung = {
         id: genId(),
         name: name || `Fassung vom ${formatDateTime(now)}`,
         datum: now.toISOString(),
+        source: fassungSource,
         textbuch: JSON.parse(JSON.stringify(state.textbuch)),
         szenen: JSON.parse(JSON.stringify(state.szenen)),
         cues: JSON.parse(JSON.stringify(state.cues)),
       };
-      
+
       state.fassungen.push(fassung);
+      // Limit auf 20 Einträge
+      if (state.fassungen.length > 20) {
+        state.fassungen = state.fassungen.slice(-20);
+      }
       state.projektMeta.fassung = fassung.name;
       state.projektMeta.fassungsDatum = fassung.datum;
       state.referenzFassungId = fassung.id; // Automatisch als Referenz für Änderungsverfolgung
@@ -5157,13 +5438,91 @@ was morgen kommt – wer ist dabei?</p>
           // Einfache Text-Paste Bereinigung
         });
         
-        // Enter-Handling
+        // Enter-Handling + Leader-Key Format-Kürzel
         editor.addEventListener('keydown', (e) => {
+          // Leader-Key Formatvorlagen: Esc aktiviert, dann Buchstabe wählt Format
+          if (e.key === 'Escape') {
+            if (_leaderActive) {
+              e.preventDefault();
+              e.stopPropagation();
+              cancelLeader();
+              return;
+            }
+            var anyModalOpen = document.querySelector('.modal-overlay');
+            if (!anyModalOpen) {
+              e.preventDefault();
+              e.stopPropagation();
+              startLeader();
+              return;
+            }
+          }
+
+          if (_leaderActive) {
+            e.preventDefault();
+            e.stopPropagation();
+            var lkey = e.key.toLowerCase();
+            cancelLeader();
+
+            // Fliesstext format class map
+            var fmtClassMap = {
+              'f': 'format-dialog', 'd': 'format-dialog',
+              'r': 'format-regieanweisung', 't': 'format-szene-titel',
+              'a': 'format-akt-titel', 'l': 'format-lied',
+              'v': 'format-vers', 'p': 'format-pause', 'n': 'format-standard'
+            };
+
+            if (lkey in fmtClassMap) {
+              var sel = window.getSelection();
+              if (sel && sel.rangeCount > 0) {
+                var node = sel.anchorNode;
+                while (node && node !== editor && node.parentNode !== editor) node = node.parentNode;
+                if (node && node.classList) {
+                  Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
+                  node.classList.add(fmtClassMap[lkey]);
+                }
+              }
+              var displayName = FORMAT_NAMEN[LEADER_MAP[lkey]] || fmtClassMap[lkey].replace('format-', '');
+              showFormatToast('Format: ' + displayName);
+              return;
+            }
+            // K = Format kopieren
+            if (lkey === 'k') {
+              var sel = window.getSelection();
+              if (sel && sel.rangeCount > 0) {
+                var node = sel.anchorNode;
+                while (node && node !== editor && node.parentNode !== editor) node = node.parentNode;
+                if (node && node.classList) {
+                  var fmtClass = Array.from(node.classList).find(function(c) { return c.startsWith('format-'); });
+                  _copiedFormat = fmtClass || null;
+                  showFormatToast('Formatvorlage kopiert: ' + (fmtClass ? fmtClass.replace('format-', '') : 'Standard'));
+                }
+              }
+              return;
+            }
+            // E = Format einfügen
+            if (lkey === 'e') {
+              if (!_copiedFormat) { showFormatToast('Keine Formatvorlage kopiert'); return; }
+              var sel = window.getSelection();
+              if (sel && sel.rangeCount > 0) {
+                var node = sel.anchorNode;
+                while (node && node !== editor && node.parentNode !== editor) node = node.parentNode;
+                if (node && node.classList) {
+                  Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
+                  node.classList.add(_copiedFormat);
+                  showFormatToast('Formatvorlage angewendet: ' + _copiedFormat.replace('format-', ''));
+                }
+              }
+              return;
+            }
+            // Unknown key - ignore
+            return;
+          }
+
           if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
             e.preventDefault();
             const selection = window.getSelection();
             if (!selection.rangeCount) return;
-            
+
             // Neuen Absatz einfügen
             const range = selection.getRangeAt(0);
             range.deleteContents();
@@ -5171,7 +5530,7 @@ was morgen kommt – wer ist dabei?</p>
             newP.classList.add('format-standard');
             newP.innerHTML = '<br>';
             range.insertNode(newP);
-            
+
             // Cursor hinter neuen Absatz setzen
             const newRange = document.createRange();
             newRange.setStartAfter(newP);
@@ -5663,12 +6022,17 @@ was morgen kommt – wer ist dabei?</p>
       // WICHTIG: Ausstehende Saves sofort ausführen beim Verlassen
       saveCurrentText(true);
       flushPendingSave();
-      
+
       const hatDaten = state.szenen?.length > 0 || state.figuren?.length > 0;
-      
+
       // Nur warnen wenn: Daten vorhanden UND nicht kürzlich exportiert
       if (hatDaten && state.dirty) {
-        const message = '⚠️ Du hast ungespeicherte Änderungen!\n\nBitte sichere dein Projekt (Menü → Sichern), bevor du das Fenster schliesst.';
+        var message;
+        if (state.filePath) {
+          message = '⚠️ Ungesicherte Änderungen in «' + state.filePath + '»!\n\nBitte sichere dein Projekt (\u2318S), bevor du das Fenster schliesst.';
+        } else {
+          message = '⚠️ Du hast ungespeicherte Änderungen!\n\nBitte sichere dein Projekt (Menü \u2192 Sichern), bevor du das Fenster schliesst.';
+        }
         e.preventDefault();
         e.returnValue = message;
         return message;
@@ -6317,6 +6681,72 @@ WICHTIGE REGELN:
             return;
           }
           
+          // Leader-Key Formatvorlagen: Esc aktiviert, dann Buchstabe wählt Format
+          if (e.key === 'Escape') {
+            if (_leaderActive) {
+              e.preventDefault();
+              e.stopPropagation();
+              cancelLeader();
+              return;
+            }
+            // Start leader mode if editor is focused and no modal is open
+            var anyModalOpen = document.querySelector('.modal-overlay');
+            if (!anyModalOpen) {
+              e.preventDefault();
+              e.stopPropagation();
+              startLeader();
+              return;
+            }
+          }
+
+          if (_leaderActive) {
+            e.preventDefault();
+            e.stopPropagation();
+            var lkey = e.key.toLowerCase();
+            cancelLeader();
+            // Format anwenden via LEADER_MAP
+            if (lkey in LEADER_MAP) {
+              var fmt = LEADER_MAP[lkey];
+              // F = figurenname maps to dialog format (Figurname → Dialog)
+              if (fmt === 'figurenname') fmt = 'dialog';
+              applyFormat(fmt);
+              showFormatToast('Format: ' + (FORMAT_NAMEN[LEADER_MAP[lkey]] || fmt));
+              return;
+            }
+            // K = Format kopieren
+            if (lkey === 'k') {
+              var sel = window.getSelection();
+              if (sel && sel.rangeCount > 0) {
+                var node = sel.anchorNode;
+                while (node && node !== editor && node.parentNode !== editor) node = node.parentNode;
+                if (node && node.classList) {
+                  var fmtClass = Array.from(node.classList).find(function(c) { return c.startsWith('format-'); });
+                  _copiedFormat = fmtClass || null;
+                  var name = fmtClass ? fmtClass.replace('format-', '') : 'Standard';
+                  showFormatToast('Formatvorlage kopiert: ' + name);
+                }
+              }
+              return;
+            }
+            // E = Format einfügen
+            if (lkey === 'e') {
+              if (!_copiedFormat) { showFormatToast('Keine Formatvorlage kopiert'); return; }
+              var fmtMap = {
+                'format-dialog': 'dialog', 'format-regieanweisung': 'regieanweisung',
+                'format-szene-titel': 'szeneTitel', 'format-akt-titel': 'aktTitel',
+                'format-lied': 'lied', 'format-vers': 'vers', 'format-pause': 'pause',
+                'format-standard': 'standard', 'format-musik': 'musik', 'format-sound': 'sound',
+                'format-notiz': 'notiz', 'format-nebentext': 'nebentext'
+              };
+              var format = fmtMap[_copiedFormat] || 'standard';
+              applyFormat(format);
+              showFormatToast('Formatvorlage angewendet: ' + format);
+              return;
+            }
+            // Unknown key - ignore
+            return;
+          }
+
           if (e.ctrlKey || e.metaKey) {
             // Undo/Redo
             if (e.key === 'z' && !e.shiftKey) {
@@ -6326,30 +6756,11 @@ WICHTIGE REGELN:
               e.preventDefault();
               redo();
             }
-            
+
             // Suchen & Ersetzen (Ctrl+H oder Ctrl+F)
             if (e.key === 'h' || e.key === 'f') {
               e.preventDefault();
               toggleSearchReplace();
-            }
-            
-            // Format-Shortcuts (Ctrl+Shift+Buchstabe)
-            if (e.shiftKey) {
-              const formatMap = {
-                'd': 'dialog',
-                'r': 'regieanweisung',
-                't': 'szeneTitel',
-                'a': 'aktTitel',
-                'l': 'lied',
-                'v': 'vers',
-                'p': 'pause',
-                'n': 'standard'
-              };
-              const format = formatMap[e.key.toLowerCase()];
-              if (format) {
-                e.preventDefault();
-                applyFormat(format);
-              }
             }
           }
         });
@@ -6461,9 +6872,15 @@ WICHTIGE REGELN:
                 <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); openModal('showSichernUnterModal')">
                   <span>💾</span> Sichern unter…
                 </button>
-                
+                <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); exportAsZip()">
+                  <span>📦</span> Komplett-Backup (ZIP)
+                </button>
+                <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); manuellesBackupErstellen()">
+                  <span>🔖</span> Backup jetzt erstellen
+                </button>
+
                 <div class="border-t border-white/10 my-1"></div>
-                
+
                 <!-- Import/Export -->
                 <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); openModal('showImportModal')">
                   <span>⬇️</span> Importieren…
@@ -6544,7 +6961,7 @@ WICHTIGE REGELN:
             <p class="text-sm text-gray-500">${getViewSubtitle()}</p>
           </div>
           <div class="flex items-center gap-3">
-            <span id="autosave-indicator" class="text-xs text-gray-400" style="min-width: 60px;"></span>
+            <span id="autosave-indicator" class="text-xs text-gray-400" style="min-width: 120px;"></span>
             <button class="dramera-twin-btn" onclick="openModal('showTwinModal')" title="${getTwinSyncText() ? 'Letzter Sync: ' + getTwinSyncText() : 'Projekt in Dramera (Werkbank) öffnen'}">
               <span style="font-size: 14px;">📐</span> Dramera
               <span class="sync-dot ${getTwinSyncDotClass()}"></span>
@@ -7947,15 +8364,72 @@ WICHTIGE REGELN:
     // ============================================
     // FASSUNGEN VIEW (v1.2: mit Uhrzeit)
     // ============================================
+    function fassungSourceIcon(source) {
+      if (source === 'browser') return '\u{1F4BB}';
+      if (source === 'datei') return '\u{1F4C1}';
+      if (source === 'manuell') return '\u{1F516}';
+      return '\u{1F4CB}';
+    }
+    function fassungSourceLabel(source) {
+      if (source === 'browser') return 'Browser';
+      if (source === 'datei') return 'Datei';
+      if (source === 'manuell') return 'Manuell';
+      return 'Unbekannt';
+    }
+    function fassungApproxSize(f) {
+      try {
+        var bytes = JSON.stringify(f).length;
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+      } catch(e) { return '?'; }
+    }
+
+    function fassungVorschau(fassungId) {
+      var fassung = state.fassungen.find(function(f) { return f.id === fassungId; });
+      if (!fassung) return;
+      var overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:20000;display:flex;align-items:center;justify-content:center;';
+      var dialog = document.createElement('div');
+      dialog.style.cssText = 'background:white;border-radius:12px;padding:1.5rem;max-width:700px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);';
+      var szenenHtml = '';
+      if (fassung.szenen) {
+        fassung.szenen.forEach(function(s) {
+          var text = fassung.textbuch && fassung.textbuch[s.id] ? fassung.textbuch[s.id] : '<em>Kein Text</em>';
+          var preview = text.length > 500 ? text.substring(0, 500) + '...' : text;
+          szenenHtml += '<div style="margin-bottom:1rem;padding:0.75rem;background:#f9fafb;border-radius:8px;">' +
+            '<h4 style="margin:0 0 0.5rem;font-size:0.9rem;color:#374151;">' + (s.nummer || '') + ' ' + (s.titel || '') + '</h4>' +
+            '<div style="font-size:0.8rem;color:#6b7280;max-height:150px;overflow:hidden;">' + preview + '</div></div>';
+        });
+      }
+      dialog.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">' +
+        '<h3 style="margin:0;font-size:1.1rem;">' + fassungSourceIcon(fassung.source) + ' ' + fassung.name + '</h3>' +
+        '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;">&times;</button></div>' +
+        '<p style="color:#6b7280;font-size:0.85rem;margin-bottom:1rem;">' + formatDateTime(fassung.datum) + ' &middot; ' + fassungSourceLabel(fassung.source) + ' &middot; ~' + fassungApproxSize(fassung) + '</p>' +
+        '<div>' + szenenHtml + '</div>' +
+        '<div style="display:flex;gap:0.75rem;margin-top:1rem;justify-content:flex-end;">' +
+          '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="padding:0.5rem 1rem;border:1px solid #d1d5db;border-radius:6px;background:white;cursor:pointer;">Schliessen</button>' +
+          '<button onclick="this.closest(\'div[style*=fixed]\').remove(); fassungLaden(\'' + fassung.id + '\');" style="padding:0.5rem 1rem;border:none;border-radius:6px;background:#6b4423;color:white;cursor:pointer;font-weight:600;">Wiederherstellen</button>' +
+        '</div>';
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+    }
+
     function renderFassungenView() {
       return `
         <div class="flex-1 p-6 overflow-y-auto">
           <div class="max-w-3xl mx-auto">
             <div class="flex justify-between items-center mb-4">
               <h2 class="text-lg font-semibold">Fassungs-Archiv</h2>
-              <button class="btn btn-success" onclick="openModal('showFassungModal')">
-                💾 Aktuelle Fassung speichern
-              </button>
+              <div class="flex gap-2">
+                <button class="btn btn-outline" onclick="manuellesBackupErstellen()" title="Backup jetzt erstellen">
+                  🔖 Backup jetzt
+                </button>
+                <button class="btn btn-success" onclick="openModal('showFassungModal')">
+                  💾 Aktuelle Fassung speichern
+                </button>
+              </div>
             </div>
             
             <!-- Warnhinweis -->
@@ -7965,7 +8439,7 @@ WICHTIGE REGELN:
                 <div>
                   <p style="font-size: 13px; font-weight: 600; color: #92400e; margin: 0 0 4px 0;">Fassungen sind nur lokal im Browser!</p>
                   <p style="font-size: 12px; color: #a16207; margin: 0;">
-                    Fassungen dienen der Änderungsverfolgung im Textbuch. Um das Projekt sicher aufzubewahren, nutze <strong>Menü → Sichern</strong>.
+                    Fassungen dienen der Änderungsverfolgung im Textbuch. Um das Projekt sicher aufzubewahren, nutze <strong>Menü → Sichern</strong> oder <strong>Komplett-Backup (ZIP)</strong>.
                   </p>
                 </div>
               </div>
@@ -7987,12 +8461,24 @@ WICHTIGE REGELN:
                   ${state.fassungen.slice().reverse().map(f => `
                     <div class="p-4 flex items-center hover:bg-gray-50">
                       <div class="flex-1">
-                        <div class="font-medium">${f.name}</div>
-                        <div class="text-sm text-gray-500">${formatDateTime(f.datum)}</div>
+                        <div class="font-medium flex items-center gap-2">
+                          <span title="${fassungSourceLabel(f.source)}">${fassungSourceIcon(f.source)}</span>
+                          ${f.name}
+                        </div>
+                        <div class="text-sm text-gray-500 flex gap-3">
+                          <span>${formatDateTime(f.datum)}</span>
+                          <span class="text-gray-400">${fassungSourceLabel(f.source)}</span>
+                          <span class="text-gray-400">~${fassungApproxSize(f)}</span>
+                        </div>
                       </div>
-                      <button class="btn btn-sm btn-outline" onclick="fassungLaden('${f.id}')">
-                        📂 Laden
-                      </button>
+                      <div class="flex gap-2">
+                        <button class="btn btn-sm btn-outline" onclick="fassungVorschau('${f.id}')" title="Vorschau">
+                          👁 Vorschau
+                        </button>
+                        <button class="btn btn-sm btn-outline" onclick="fassungLaden('${f.id}')">
+                          📂 Wiederherstellen
+                        </button>
+                      </div>
                     </div>
                   `).join('')}
                 </div>
@@ -9489,7 +9975,8 @@ WICHTIGE REGELN:
     function renderHelpModal() {
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const mod = isMac ? '⌘' : 'Ctrl';
-      const modS = isMac ? '⌘⇧' : 'Ctrl+Shift';
+      const modShift = isMac ? '⌘⇧' : 'Ctrl+Shift';
+      const modFmt = 'Esc →';
       
       return `
         <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showHelpModal')">
@@ -9519,23 +10006,27 @@ WICHTIGE REGELN:
                     <h4 style="font-size:13px; font-weight:600; color:#374151; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">Textbearbeitung</h4>
                     <table style="width:100%; font-size:12px; border-collapse:collapse;">
                       <tr><td style="padding:3px 0; color:#6b7280;">${mod}+Z</td><td>Rückgängig</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+Z</td><td>Wiederholen</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modShift}+Z</td><td>Wiederholen</td></tr>
                       <tr><td style="padding:3px 0; color:#6b7280;">${mod}+B</td><td>Fett</td></tr>
                       <tr><td style="padding:3px 0; color:#6b7280;">${mod}+I</td><td>Kursiv</td></tr>
                       <tr><td style="padding:3px 0; color:#6b7280;">${mod}+U</td><td>Unterstrichen</td></tr>
                       <tr><td style="padding:3px 0; color:#6b7280;">${mod}+F</td><td>Suchen & Ersetzen</td></tr>
                     </table>
                     
-                    <h4 style="font-size:13px; font-weight:600; color:#374151; margin-bottom:8px; margin-top:16px; text-transform:uppercase; letter-spacing:0.5px;">Formatvorlagen</h4>
+                    <h4 style="font-size:13px; font-weight:600; color:#374151; margin-bottom:8px; margin-top:16px; text-transform:uppercase; letter-spacing:0.5px;">Formatvorlagen (Leader-Key)</h4>
+                    <p style="font-size:11px; color:#6b7280; margin-bottom:6px;">Esc drücken, dann Buchstabe:</p>
                     <table style="width:100%; font-size:12px; border-collapse:collapse;">
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+D</td><td>Dialog</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+R</td><td>Regieanweisung</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+T</td><td>Szenen-Titel</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+A</td><td>Akt-Titel</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+L</td><td>Lied</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+V</td><td>Vers</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+P</td><td>Pause</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">${modS}+N</td><td>Normal</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} F</td><td>Figurenname</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} D</td><td>Dialog</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} R</td><td>Regieanweisung</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} T</td><td>Szenen-Titel</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} A</td><td>Akt-Titel</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} L</td><td>Lied</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} V</td><td>Vers</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} P</td><td>Pause</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} N</td><td>Normal</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} K</td><td>Format kopieren</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">${modFmt} E</td><td>Format einfügen</td></tr>
                     </table>
                   </div>
                   
@@ -12537,11 +13028,11 @@ ${chunkText}`;
       size: A4; 
       margin: 2.5cm 2cm;
     }
-    body { 
-      font-family: 'Times New Roman', Times, serif;
-      font-size: 12pt;
-      line-height: 1.5;
-      color: #000;
+    body {
+      font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+      font-size: 11pt;
+      line-height: 1.3;
+      color: #212121;
     }
     
     /* Titelseite */
@@ -12643,75 +13134,107 @@ ${chunkText}`;
     
     /* Fallback für format-dialog falls nicht konvertiert */
     .format-dialog {
-      margin: 0.4cm 0;
+      font-family: 'Trebuchet MS', sans-serif;
+      font-size: 11pt;
+      line-height: 1.1;
+      margin: 0 0 0.2cm;
     }
     .format-dialog .figur-name {
       font-weight: bold;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      font-size: 10.5pt;
+      letter-spacing: 0.03em;
+      font-size: 10pt;
+      line-height: 1.2;
+      margin-top: 5pt;
     }
     .figur-name {
       font-weight: bold;
       text-transform: uppercase;
     }
-    
+    .format-dialog .dialog-text {
+      margin-left: 0.5cm;
+      margin-bottom: 6pt;
+    }
+
     .format-regieanweisung {
       font-family: Georgia, serif;
       font-style: italic;
-      font-size: 11pt;
-      margin: 0.3cm 0;
-      margin-left: 6cm;
+      font-size: 10pt;
+      margin-top: 3pt;
+      margin-bottom: 7pt;
+      margin-left: 4cm;
+      line-height: 1.3;
       color: #414141;
     }
     .format-szene-titel {
       font-family: Georgia, serif;
       font-weight: bold;
-      font-size: 14pt;
-      margin: 1.2cm 0 0.8cm;
-      border-bottom: 1px solid #ccc;
+      font-size: 12pt;
+      text-align: center;
+      margin-top: 24pt;
+      margin-bottom: 12pt;
+      line-height: 1.3;
     }
     .format-akt-titel {
+      font-family: 'Trebuchet MS', sans-serif;
       font-weight: bold;
       font-size: 18pt;
       text-align: center;
-      margin: 2cm 0 1cm;
+      margin-top: 30pt;
+      margin-bottom: 12pt;
       text-transform: uppercase;
+      letter-spacing: 0.2em;
+      line-height: 1.2;
     }
     .format-lied {
+      font-family: 'Trebuchet MS', sans-serif;
       font-style: italic;
       font-size: 11pt;
-      margin: 0.05cm 0;
-      margin-left: 2cm;
-      color: #333;
+      margin-top: 0;
+      margin-bottom: 3pt;
+      margin-left: 0.5cm;
+      line-height: 1.3;
+      color: #212121;
     }
     .format-vers {
-      margin: 0.05cm 0;
+      font-family: 'Trebuchet MS', sans-serif;
+      margin-top: 0;
+      margin-bottom: 3pt;
       margin-left: 0.5cm;
       font-style: italic;
       font-size: 11pt;
+      line-height: 1.3;
     }
     .format-pause {
+      font-family: 'Trebuchet MS', sans-serif;
       text-align: center;
       font-weight: bold;
-      margin: 1.5cm 0;
-      font-size: 14pt;
+      text-transform: uppercase;
+      letter-spacing: 0.3em;
+      margin-top: 24pt;
+      margin-bottom: 24pt;
+      font-size: 12pt;
+      line-height: 1.2;
+      color: #888888;
     }
     .format-standard {
-      margin: 0.4cm 0;
+      font-family: 'Trebuchet MS', sans-serif;
+      font-size: 11pt;
+      line-height: 1.3;
+      margin: 0 0 6pt;
     }
     .inline-regie {
       font-family: Georgia, serif;
       font-style: italic;
       color: #414141;
-      font-size: 0.92em;
+      font-size: 10pt;
     }
     
     /* Cue-Markierungen entfernen für Druck */
     .cue-marker { display: none; }
     
     @media print {
-      body { font-size: 11pt; }
+      body { font-size: 11pt; font-family: 'Trebuchet MS', sans-serif; }
     }
   </style>
 </head>
@@ -13086,9 +13609,9 @@ ${chunkText}`;
           if (szenen.length === 0) return;
           
           children.push(new Paragraph({
-            children: [new TextRun({ text: gruppe, bold: true, size: 22, allCaps: true, font: 'Trebuchet MS', characterSpacing: 24, color: '212121' })],
+            children: [new TextRun({ text: gruppe, bold: true, size: 36, allCaps: true, font: 'Trebuchet MS', characterSpacing: 40, color: '212121' })],
             alignment: AlignmentType.CENTER,
-            spacing: { before: 480, after: 120 },
+            spacing: { before: 600, after: 240 },
             style: 'AktTitel'
           }));
           
@@ -13107,35 +13630,35 @@ ${chunkText}`;
         styles: {
           default: {
             document: {
-              run: { font: 'Trebuchet MS', size: 24, color: '212121' },
+              run: { font: 'Trebuchet MS', size: 22, color: '212121' },
               paragraph: { spacing: { line: 288 } }
             }
           },
           paragraphStyles: [
             { id: 'Dialog', name: 'Dialog', basedOn: 'Normal', next: 'Normal',
-              run: { font: 'Trebuchet MS', size: 24, color: '212121' }, 
-              paragraph: { spacing: { before: 0, after: 140, line: 288 }, indent: { left: 282 } } },
+              run: { font: 'Trebuchet MS', size: 22, color: '212121' },
+              paragraph: { spacing: { before: 0, after: 120, line: 264 }, indent: { left: 283 } } },
             { id: 'FigurName', name: 'Figurenname', basedOn: 'Normal', next: 'Dialog',
-              run: { font: 'Trebuchet MS', size: 21, bold: true, allCaps: true, characterSpacing: 12, color: '212121' },
-              paragraph: { spacing: { before: 200, after: 20 } } },
+              run: { font: 'Trebuchet MS', size: 20, bold: true, allCaps: true, characterSpacing: 6, color: '212121' },
+              paragraph: { spacing: { before: 100, after: 20 } } },
             { id: 'Regieanweisung', name: 'Regieanweisung', basedOn: 'Normal', next: 'Normal',
-              run: { font: 'Georgia', italics: true, size: 22, color: '414141' }, 
-              paragraph: { spacing: { before: 60, after: 140 }, indent: { left: 1983 } } },
+              run: { font: 'Georgia', italics: true, size: 20, color: '414141' },
+              paragraph: { spacing: { before: 60, after: 140 }, indent: { left: 2268 } } },
             { id: 'Szenenbeschreibung', name: 'Szenenbeschreibung', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Georgia', italics: true, size: 19, color: '434343' },
               paragraph: { indent: { left: 567, right: -141 }, spacing: { before: 120, after: 160, line: 288 } } },
             { id: 'Lied', name: 'Lied', basedOn: 'Normal', next: 'Normal',
-              run: { font: 'Trebuchet MS', italics: true, size: 22, color: '212121' }, 
-              paragraph: { indent: { left: 1134 }, spacing: { before: 0, after: 0, line: 264 } } },
+              run: { font: 'Trebuchet MS', italics: true, size: 22, color: '212121' },
+              paragraph: { indent: { left: 283 }, spacing: { before: 0, after: 60, line: 264 } } },
             { id: 'LiedTitel', name: 'Lied-Titel', basedOn: 'Normal', next: 'Lied',
               run: { font: 'Trebuchet MS', size: 20, bold: true, italics: true, color: '212121' },
               paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 160, after: 80 } } },
             { id: 'Vers', name: 'Vers', basedOn: 'Normal', next: 'Normal',
-              run: { font: 'Trebuchet MS', italics: true, size: 22, color: '212121' }, 
-              paragraph: { indent: { left: 282 }, spacing: { before: 0, after: 0, line: 264 } } },
+              run: { font: 'Trebuchet MS', italics: true, size: 22, color: '212121' },
+              paragraph: { indent: { left: 283 }, spacing: { before: 0, after: 60, line: 264 } } },
             { id: 'AktTitel', name: 'Akt-Titel', basedOn: 'Normal', next: 'Normal',
-              run: { font: 'Trebuchet MS', bold: true, size: 22, allCaps: true, characterSpacing: 24, color: '212121' }, 
-              paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 480, after: 120 } } },
+              run: { font: 'Trebuchet MS', bold: true, size: 36, allCaps: true, characterSpacing: 40, color: '212121' },
+              paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 600, after: 240 } } },
             { id: 'SzenenTitel', name: 'Szenen-Titel', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Georgia', bold: true, size: 24, color: '212121' }, 
               paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 360, after: 360 } } },
@@ -13147,8 +13670,8 @@ ${chunkText}`;
               run: { font: 'Trebuchet MS', bold: true, size: 24, color: '888888' }, 
               paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 400, after: 400 } } },
             { id: 'Standard', name: 'Standard', basedOn: 'Normal', next: 'Normal',
-              run: { font: 'Trebuchet MS', size: 24, color: '212121' }, 
-              paragraph: { spacing: { after: 140, line: 288 } } },
+              run: { font: 'Trebuchet MS', size: 22, color: '212121' },
+              paragraph: { spacing: { after: 120, line: 288 } } },
             { id: 'TechnikCue', name: 'Technik-Cue', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Trebuchet MS', bold: true, size: 16, color: '7c3aed' }, 
               paragraph: { spacing: { before: 20, after: 20 } } }
@@ -13195,6 +13718,7 @@ ${chunkText}`;
       URL.revokeObjectURL(url);
       
       state.dirty = false; // Export erstellt
+      updateHeaderStatus();
       closeModal('showExportModal');
     }
     
@@ -13273,9 +13797,9 @@ ${chunkText}`;
         };
         const font = fontMap[style] || 'Trebuchet MS';
         const sizeMap = {
-          'Dialog': 24, 'Standard': 24, 'Vers': 22, 'Lied': 22, 'LiedTitel': 20,
-          'Regieanweisung': 22, 'Szenenbeschreibung': 19, 'FigurName': 21,
-          'AktTitel': 22, 'SzenenTitel': 24, 'Pause': 24, 'TechnikCue': 16
+          'Dialog': 22, 'Standard': 22, 'Vers': 22, 'Lied': 22, 'LiedTitel': 20,
+          'Regieanweisung': 20, 'Szenenbeschreibung': 19, 'FigurName': 20,
+          'AktTitel': 36, 'SzenenTitel': 24, 'Pause': 24, 'TechnikCue': 16
         };
         const dialogSize = sizeMap[style] || 24;
         const colorMap = {
@@ -13292,7 +13816,7 @@ ${chunkText}`;
           }
           return text.split(/(\([^)]{2,}\))/g).filter(Boolean).map(part => {
             if (/^\([^)]{2,}\)$/.test(part)) {
-              return new TextRun({ text: part, size: size - 2, font: 'Georgia', italics: true, color: '414141' });
+              return new TextRun({ text: part, size: 20, font: 'Georgia', italics: true, color: '414141' });
             }
             return new TextRun({ text: part, size: size, font: font, color: color });
           });
@@ -13301,9 +13825,9 @@ ${chunkText}`;
         // Figurenname als eigener Absatz (Variante A)
         if (figurName) {
           children.push(new Paragraph({
-            children: [new TextRun({ text: figurName.replace(/\s*$/, ''), bold: true, size: 21, font: 'Trebuchet MS', allCaps: true, characterSpacing: 12, color: '212121' })],
+            children: [new TextRun({ text: figurName.replace(/\s*$/, ''), bold: true, size: 20, font: 'Trebuchet MS', allCaps: true, characterSpacing: 6, color: '212121' })],
             style: 'FigurName',
-            spacing: { before: 200, after: 20 }
+            spacing: { before: 100, after: 20 }
           }));
         }
         
@@ -13610,6 +14134,7 @@ ${chunkText}`;
       URL.revokeObjectURL(url);
 
       state.dirty = false;
+      updateHeaderStatus();
       closeModal('showExportModal');
       const szenenMitText = state.szenen.filter(s => (state.textbuch[s.id] || '').trim().length > 0).length;
 
@@ -16408,13 +16933,16 @@ ${chunkText}`;
             const writable = await savedFileHandle.createWritable();
             await writable.write(json);
             await writable.close();
+            state.filePath = savedFileHandle.name;
+            state.lastFileSaveTime = new Date();
             state.dirty = false;
             // Kurze Bestätigung anzeigen
             showSaveConfirmation();
+            updateHeaderStatus();
             if (callback) callback();
             return;
           }
-          
+
           // Erstmaliges Sichern → Picker öffnen
           const filename = makeExportFilename('Backup', 'json');
           savedFileHandle = await window.showSaveFilePicker({
@@ -16427,8 +16955,11 @@ ${chunkText}`;
           const writable = await savedFileHandle.createWritable();
           await writable.write(json);
           await writable.close();
+          state.filePath = savedFileHandle.name;
+          state.lastFileSaveTime = new Date();
           state.dirty = false;
           showSaveConfirmation();
+          updateHeaderStatus();
           if (callback) callback();
           return;
         } catch (err) {
@@ -16445,13 +16976,17 @@ ${chunkText}`;
       // Fallback für Safari/Firefox: Download wie bisher
       await downloadDrameraExport();
       state.dirty = false;
+      updateHeaderStatus();
       if (callback) callback();
     }
     
     function showSaveConfirmation() {
       // Kurze Bestätigung oben rechts einblenden
       const toast = document.createElement('div');
-      toast.textContent = '✅ Gesichert!';
+      const now = new Date();
+      const time = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      const fileName = state.filePath ? ' → ' + state.filePath : '';
+      toast.textContent = '✅ Gesichert um ' + time + fileName;
       toast.style.cssText = 'position:fixed;top:20px;right:20px;background:#059669;color:white;padding:10px 20px;border-radius:8px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:opacity 0.3s;';
       document.body.appendChild(toast);
       setTimeout(() => { toast.style.opacity = '0'; }, 1500);
@@ -16485,7 +17020,7 @@ ${chunkText}`;
               
               <!-- Von Datei öffnen -->
               <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-blue-400 cursor-pointer mb-4"
-                   onclick="document.getElementById('oeffnen-datei-input').click()">
+                   onclick="oeffnenVonDatei()">
                 <div class="text-2xl mb-1">📁</div>
                 <p class="text-sm font-medium text-gray-700">Projektdatei öffnen (.json)</p>
                 <p class="text-xs text-gray-400">Von der Festplatte laden</p>
@@ -16523,19 +17058,52 @@ ${chunkText}`;
     
     // Datei öffnen (aus Öffnen-Dialog)
     function oeffnenVonDatei(input) {
-      const file = input.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          const data = JSON.parse(e.target.result);
-          importFromDramera(data);
-          closeModal('showOeffnenModal');
-        } catch(err) {
-          alert('❌ Fehler beim Öffnen: ' + err.message);
-        }
-      };
-      reader.readAsText(file);
+      // If called without an input element (e.g. from div onclick) and File System Access API is available
+      if (window.showOpenFilePicker && (!input || !input.files)) {
+        window.showOpenFilePicker({
+          types: [{ description: 'Rebu Projekt', accept: { 'application/json': ['.json'] } }]
+        }).then(function(handles) {
+          var handle = handles[0];
+          return handle.getFile().then(function(file) {
+            return file.text().then(function(text) {
+              var data = JSON.parse(text);
+              importFromDramera(data);
+              closeModal('showOeffnenModal');
+              savedFileHandle = handle;
+              state.filePath = handle.name;
+              state.dirty = false;
+              state.lastFileSaveTime = null;
+              updateHeaderStatus();
+            });
+          });
+        }).catch(function(err) {
+          if (err.name === 'AbortError') return;
+          console.error('Fehler beim Öffnen:', err);
+          alert('Fehler beim Öffnen: ' + err.message);
+        });
+        return;
+      }
+      // Called from onchange with input element, or no File System Access API — use classic fallback
+      if (input && input.files) {
+        const file = input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            const data = JSON.parse(e.target.result);
+            importFromDramera(data);
+            closeModal('showOeffnenModal');
+            state.dirty = false;
+            updateHeaderStatus();
+          } catch(err) {
+            alert('Fehler beim Öffnen: ' + err.message);
+          }
+        };
+        reader.readAsText(file);
+      } else {
+        // No File System Access API and no input element — trigger the hidden file input
+        document.getElementById('oeffnen-datei-input').click();
+      }
     }
     
     // Projekt aus lokaler Liste laden
@@ -16598,6 +17166,7 @@ ${chunkText}`;
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       
       state.dirty = false; // Backup erstellt
+      updateHeaderStatus();
       // Alle möglichen Modals schliessen
       closeModal('showExportModal');
       closeModal('showSichernUnterModal');
@@ -16628,17 +17197,22 @@ ${chunkText}`;
           const writable = await savedFileHandle.createWritable();
           await writable.write(json);
           await writable.close();
+          state.filePath = savedFileHandle.name;
+          state.lastFileSaveTime = new Date();
           state.dirty = false;
           showSaveConfirmation();
+          updateHeaderStatus();
           return;
         } catch (err) {
           if (err.name === 'AbortError') return; // User abgebrochen
           console.warn('File System Access API Fehler, Fallback auf Download:', err);
         }
       }
-      
+
       // Fallback: Download
       await downloadDrameraExport();
+      state.dirty = false;
+      updateHeaderStatus();
     }
 
     function saveFassung() {
@@ -16698,7 +17272,10 @@ const NINA_LOGO_BASE64 = '';
       
       render();
       updateStorageInfo();
-      
+
+      // Crash Recovery prüfen
+      setTimeout(function() { checkCrashRecovery(); }, 1000);
+
       // API-Key aus IndexedDB wiederherstellen (falls localStorage gelöscht)
       restoreApiKey();
       
