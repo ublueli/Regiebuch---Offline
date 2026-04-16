@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="app-build" content="rebu-2026-04-16T1">
+  <meta name="app-build" content="rebu-2026-04-16T2">
   <title>N!NA-Rebu v2.4 - Regiebuch mit KI (NINA-Exchange v2.0, Stand-alone)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
@@ -1649,6 +1649,7 @@
     // =====================================================
     var _leaderActive = false;
     var _leaderTimer = null;
+    var _leaderContext = null; // gespeicherter Editor-Kontext bei Esc
 
     var LEADER_MAP = {
       'f': 'figurenname', 'd': 'dialog', 'r': 'regieanweisung',
@@ -1692,22 +1693,23 @@
 
     function cancelLeader() {
       _leaderActive = false;
+      _leaderContext = null;
       if (_leaderTimer) { clearTimeout(_leaderTimer); _leaderTimer = null; }
       hideLeaderPopup();
     }
 
-    function startLeader() {
+    function startLeader(ctx) {
       // Don't start if a modal is open
       var overlays = document.querySelectorAll('.modal-overlay');
       for (var i = 0; i < overlays.length; i++) {
         if (overlays[i].offsetParent !== null || overlays[i].style.display !== 'none') {
-          // Check if it's actually visible (rendered in DOM and not hidden)
           if (overlays[i].closest('[style*="display: none"]') === null && overlays[i].closest('[style*="display:none"]') === null) {
             return;
           }
         }
       }
       _leaderActive = true;
+      _leaderContext = ctx || null;
       if (_leaderTimer) clearTimeout(_leaderTimer);
       _leaderTimer = setTimeout(function() {
         cancelLeader();
@@ -1722,28 +1724,15 @@
     // =====================================================
     document.addEventListener('keydown', function(e) {
       var activeEl = document.activeElement;
-      // Nur reagieren wenn ein Editor fokussiert ist
       var inEditor = activeEl && (
         activeEl.id === 'text-editor' ||
         activeEl.classList.contains('fliesstext-editor') ||
         activeEl.isContentEditable
       );
+      var isSceneEditor = activeEl && activeEl.id === 'text-editor';
+      var isFliesstextEditor = activeEl && activeEl.classList.contains('fliesstext-editor');
 
-      // DEBUG: Sichtbare Anzeige bei Esc (wird nach Diagnose entfernt)
-      if (e.key === 'Escape') {
-        var dbg = document.createElement('div');
-        dbg.style.cssText = 'position:fixed;top:8px;left:8px;background:#000;color:#0f0;padding:8px 12px;border-radius:6px;font-size:11px;font-family:monospace;z-index:99999;white-space:pre;max-width:500px;';
-        dbg.textContent = '[LEADER-DBG] Esc pressed\n'
-          + 'activeEl: ' + (activeEl ? activeEl.tagName + '#' + (activeEl.id||'') + '.' + (activeEl.className||'').substring(0,40) : 'null') + '\n'
-          + 'isContentEditable: ' + (activeEl ? activeEl.isContentEditable : 'N/A') + '\n'
-          + 'inEditor: ' + inEditor + '\n'
-          + 'leaderActive: ' + _leaderActive + '\n'
-          + 'modal-overlay found: ' + !!document.querySelector('.modal-overlay');
-        document.body.appendChild(dbg);
-        setTimeout(function(){ dbg.remove(); }, 4000);
-      }
-
-      // Esc-Taste
+      // Esc-Taste — start/cancel leader, save editor context
       if (e.key === 'Escape') {
         if (_leaderActive) {
           e.preventDefault();
@@ -1756,47 +1745,38 @@
           if (!anyModal) {
             e.preventDefault();
             e.stopPropagation();
-            startLeader();
+            // Save editor context so follow-up key works even if focus shifts
+            startLeader({
+              isSceneEditor: isSceneEditor,
+              isFliesstextEditor: isFliesstextEditor,
+              inEditor: inEditor,
+              activeEl: activeEl
+            });
             return;
           }
-        } else {
         }
         return;
       }
 
-      // Folge-Taste wenn Leader aktiv
+      // Folge-Taste wenn Leader aktiv — use SAVED context from Esc press
       if (_leaderActive) {
         e.preventDefault();
         e.stopPropagation();
         var lkey = e.key.toLowerCase();
+        var ctx = _leaderContext || {};
+        var ctxIsScene = ctx.isSceneEditor;
+        var ctxIsFliesstext = ctx.isFliesstextEditor;
+        var ctxInEditor = ctx.inEditor;
+        var ctxActiveEl = ctx.activeEl;
         cancelLeader();
-
-        // Welcher Editor ist aktiv?
-        var isSceneEditor = activeEl && activeEl.id === 'text-editor';
-        var isFliesstextEditor = activeEl && activeEl.classList.contains('fliesstext-editor');
-
-        // DEBUG: Folge-Taste
-        var dbg2 = document.createElement('div');
-        dbg2.style.cssText = 'position:fixed;top:8px;right:8px;background:#000;color:#ff0;padding:8px 12px;border-radius:6px;font-size:11px;font-family:monospace;z-index:99999;white-space:pre;max-width:500px;';
-        dbg2.textContent = '[LEADER-DBG] Follow-up: "' + lkey + '"\n'
-          + 'in LEADER_MAP: ' + (lkey in LEADER_MAP) + '\n'
-          + 'isSceneEditor: ' + isSceneEditor + '\n'
-          + 'isFliesstextEditor: ' + isFliesstextEditor + '\n'
-          + 'inEditor: ' + inEditor + '\n'
-          + 'applyFormat exists: ' + (typeof applyFormat === 'function') + '\n'
-          + 'mapped to: ' + (LEADER_MAP[lkey] || 'N/A');
-        document.body.appendChild(dbg2);
-        setTimeout(function(){ dbg2.remove(); }, 4000);
 
         // Format-Tasten
         if (lkey in LEADER_MAP) {
-          if (isSceneEditor && typeof applyFormat === 'function') {
-            var fmt = LEADER_MAP[lkey];
-            applyFormat(fmt);
-          } else if (isFliesstextEditor || inEditor) {
-            // Direkte CSS-Klassen-Manipulation
+          if (ctxIsScene && typeof applyFormat === 'function') {
+            applyFormat(LEADER_MAP[lkey]);
+          } else if ((ctxIsFliesstext || ctxInEditor) && ctxActiveEl) {
             var fmtClassMap = {
-              'f': 'format-dialog', 'd': 'format-dialog',
+              'f': 'format-figurenname', 'd': 'format-dialog',
               'r': 'format-regieanweisung', 't': 'format-szene-titel',
               'a': 'format-akt-titel', 'l': 'format-lied',
               'v': 'format-vers', 'p': 'format-pause', 'n': 'format-standard'
@@ -1805,7 +1785,7 @@
               var sel = window.getSelection();
               if (sel && sel.rangeCount > 0) {
                 var node = sel.anchorNode;
-                while (node && node !== activeEl && node.parentNode !== activeEl) node = node.parentNode;
+                while (node && node !== ctxActiveEl && node.parentNode !== ctxActiveEl) node = node.parentNode;
                 if (node && node.classList) {
                   Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
                   node.classList.add(fmtClassMap[lkey]);
@@ -1813,17 +1793,16 @@
               }
             }
           }
-          var displayName = FORMAT_NAMEN[LEADER_MAP[lkey]] || lkey;
-          showFormatToast('Format: ' + displayName);
+          showFormatToast('Format: ' + (FORMAT_NAMEN[LEADER_MAP[lkey]] || lkey));
           return;
         }
 
         // K = Format kopieren
-        if (lkey === 'k' && inEditor) {
+        if (lkey === 'k' && ctxActiveEl) {
           var sel = window.getSelection();
           if (sel && sel.rangeCount > 0) {
             var node = sel.anchorNode;
-            while (node && node !== activeEl && node.parentNode !== activeEl) node = node.parentNode;
+            while (node && node !== ctxActiveEl && node.parentNode !== ctxActiveEl) node = node.parentNode;
             if (node && node.classList) {
               var fmtClass = Array.from(node.classList).find(function(c) { return c.startsWith('format-'); });
               _copiedFormat = fmtClass || null;
@@ -1834,21 +1813,21 @@
         }
 
         // E = Format einfügen
-        if (lkey === 'e' && inEditor) {
+        if (lkey === 'e') {
           if (!_copiedFormat) { showFormatToast('Kein Format kopiert'); return; }
-          if (isSceneEditor && typeof applyFormat === 'function') {
+          if (ctxIsScene && typeof applyFormat === 'function') {
             var fmtMap = {
-              'format-dialog': 'dialog', 'format-regieanweisung': 'regieanweisung',
-              'format-szene-titel': 'szeneTitel', 'format-akt-titel': 'aktTitel',
-              'format-lied': 'lied', 'format-vers': 'vers', 'format-pause': 'pause',
-              'format-standard': 'standard'
+              'format-figurenname': 'figurenname', 'format-dialog': 'dialog',
+              'format-regieanweisung': 'regieanweisung', 'format-szene-titel': 'szeneTitel',
+              'format-akt-titel': 'aktTitel', 'format-lied': 'lied',
+              'format-vers': 'vers', 'format-pause': 'pause', 'format-standard': 'standard'
             };
             applyFormat(fmtMap[_copiedFormat] || 'standard');
-          } else {
+          } else if (ctxActiveEl) {
             var sel = window.getSelection();
             if (sel && sel.rangeCount > 0) {
               var node = sel.anchorNode;
-              while (node && node !== activeEl && node.parentNode !== activeEl) node = node.parentNode;
+              while (node && node !== ctxActiveEl && node.parentNode !== ctxActiveEl) node = node.parentNode;
               if (node && node.classList) {
                 Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
                 node.classList.add(_copiedFormat);
@@ -1858,11 +1837,9 @@
           showFormatToast('Format angewendet: ' + _copiedFormat.replace('format-', ''));
           return;
         }
-
-        // Unknown key - ignore
         return;
       }
-    }, true);  // CAPTURE phase — fires before editor handlers!
+    }, true);  // CAPTURE phase
 
     // =====================================================
     // ZENTRALE FORMAT-DEFINITIONEN (Pages "Die Vollmacht")
