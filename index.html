@@ -1716,6 +1716,128 @@
     }
 
     // =====================================================
+    // GLOBALER LEADER-KEY HANDLER (document-level)
+    // Fängt Esc und Folge-Tasten in ALLEN Editoren ab
+    // =====================================================
+    document.addEventListener('keydown', function(e) {
+      // Nur reagieren wenn ein Editor fokussiert ist
+      var activeEl = document.activeElement;
+      var inEditor = activeEl && (
+        activeEl.id === 'text-editor' ||
+        activeEl.classList.contains('fliesstext-editor') ||
+        activeEl.isContentEditable
+      );
+
+      // Esc-Taste
+      if (e.key === 'Escape') {
+        if (_leaderActive) {
+          e.preventDefault();
+          e.stopPropagation();
+          cancelLeader();
+          return;
+        }
+        // Nur starten wenn Editor fokussiert und kein Modal offen
+        if (inEditor) {
+          var anyModal = document.querySelector('.modal-overlay');
+          if (!anyModal) {
+            e.preventDefault();
+            e.stopPropagation();
+            startLeader();
+            return;
+          }
+        }
+        return;
+      }
+
+      // Folge-Taste wenn Leader aktiv
+      if (_leaderActive) {
+        e.preventDefault();
+        e.stopPropagation();
+        var lkey = e.key.toLowerCase();
+        cancelLeader();
+
+        // Welcher Editor ist aktiv?
+        var isSceneEditor = activeEl && activeEl.id === 'text-editor';
+        var isFliesstextEditor = activeEl && activeEl.classList.contains('fliesstext-editor');
+
+        // Format-Tasten
+        if (lkey in LEADER_MAP) {
+          if (isSceneEditor && typeof applyFormat === 'function') {
+            var fmt = LEADER_MAP[lkey];
+            if (fmt === 'figurenname') fmt = 'dialog';
+            applyFormat(fmt);
+          } else if (isFliesstextEditor || inEditor) {
+            // Direkte CSS-Klassen-Manipulation
+            var fmtClassMap = {
+              'f': 'format-dialog', 'd': 'format-dialog',
+              'r': 'format-regieanweisung', 't': 'format-szene-titel',
+              'a': 'format-akt-titel', 'l': 'format-lied',
+              'v': 'format-vers', 'p': 'format-pause', 'n': 'format-standard'
+            };
+            if (lkey in fmtClassMap) {
+              var sel = window.getSelection();
+              if (sel && sel.rangeCount > 0) {
+                var node = sel.anchorNode;
+                while (node && node !== activeEl && node.parentNode !== activeEl) node = node.parentNode;
+                if (node && node.classList) {
+                  Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
+                  node.classList.add(fmtClassMap[lkey]);
+                }
+              }
+            }
+          }
+          var displayName = FORMAT_NAMEN[LEADER_MAP[lkey]] || lkey;
+          showFormatToast('Format: ' + displayName);
+          return;
+        }
+
+        // K = Format kopieren
+        if (lkey === 'k' && inEditor) {
+          var sel = window.getSelection();
+          if (sel && sel.rangeCount > 0) {
+            var node = sel.anchorNode;
+            while (node && node !== activeEl && node.parentNode !== activeEl) node = node.parentNode;
+            if (node && node.classList) {
+              var fmtClass = Array.from(node.classList).find(function(c) { return c.startsWith('format-'); });
+              _copiedFormat = fmtClass || null;
+              showFormatToast('Format kopiert: ' + (fmtClass ? fmtClass.replace('format-', '') : 'Standard'));
+            }
+          }
+          return;
+        }
+
+        // E = Format einfügen
+        if (lkey === 'e' && inEditor) {
+          if (!_copiedFormat) { showFormatToast('Kein Format kopiert'); return; }
+          if (isSceneEditor && typeof applyFormat === 'function') {
+            var fmtMap = {
+              'format-dialog': 'dialog', 'format-regieanweisung': 'regieanweisung',
+              'format-szene-titel': 'szeneTitel', 'format-akt-titel': 'aktTitel',
+              'format-lied': 'lied', 'format-vers': 'vers', 'format-pause': 'pause',
+              'format-standard': 'standard'
+            };
+            applyFormat(fmtMap[_copiedFormat] || 'standard');
+          } else {
+            var sel = window.getSelection();
+            if (sel && sel.rangeCount > 0) {
+              var node = sel.anchorNode;
+              while (node && node !== activeEl && node.parentNode !== activeEl) node = node.parentNode;
+              if (node && node.classList) {
+                Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
+                node.classList.add(_copiedFormat);
+              }
+            }
+          }
+          showFormatToast('Format angewendet: ' + _copiedFormat.replace('format-', ''));
+          return;
+        }
+
+        // Unknown key - ignore
+        return;
+      }
+    }, true);  // CAPTURE phase — fires before editor handlers!
+
+    // =====================================================
     // ZENTRALE FORMAT-DEFINITIONEN (Pages "Die Vollmacht")
     // Alle Modi und Exporte greifen auf diese Werte zu.
     // =====================================================
@@ -5440,84 +5562,6 @@ was morgen kommt – wer ist dabei?</p>
         
         // Enter-Handling + Leader-Key Format-Kürzel
         editor.addEventListener('keydown', (e) => {
-          // Leader-Key Formatvorlagen: Esc aktiviert, dann Buchstabe wählt Format
-          if (e.key === 'Escape') {
-            if (_leaderActive) {
-              e.preventDefault();
-              e.stopPropagation();
-              cancelLeader();
-              return;
-            }
-            var anyModalOpen = document.querySelector('.modal-overlay');
-            if (!anyModalOpen) {
-              e.preventDefault();
-              e.stopPropagation();
-              startLeader();
-              return;
-            }
-          }
-
-          if (_leaderActive) {
-            e.preventDefault();
-            e.stopPropagation();
-            var lkey = e.key.toLowerCase();
-            cancelLeader();
-
-            // Fliesstext format class map
-            var fmtClassMap = {
-              'f': 'format-dialog', 'd': 'format-dialog',
-              'r': 'format-regieanweisung', 't': 'format-szene-titel',
-              'a': 'format-akt-titel', 'l': 'format-lied',
-              'v': 'format-vers', 'p': 'format-pause', 'n': 'format-standard'
-            };
-
-            if (lkey in fmtClassMap) {
-              var sel = window.getSelection();
-              if (sel && sel.rangeCount > 0) {
-                var node = sel.anchorNode;
-                while (node && node !== editor && node.parentNode !== editor) node = node.parentNode;
-                if (node && node.classList) {
-                  Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
-                  node.classList.add(fmtClassMap[lkey]);
-                }
-              }
-              var displayName = FORMAT_NAMEN[LEADER_MAP[lkey]] || fmtClassMap[lkey].replace('format-', '');
-              showFormatToast('Format: ' + displayName);
-              return;
-            }
-            // K = Format kopieren
-            if (lkey === 'k') {
-              var sel = window.getSelection();
-              if (sel && sel.rangeCount > 0) {
-                var node = sel.anchorNode;
-                while (node && node !== editor && node.parentNode !== editor) node = node.parentNode;
-                if (node && node.classList) {
-                  var fmtClass = Array.from(node.classList).find(function(c) { return c.startsWith('format-'); });
-                  _copiedFormat = fmtClass || null;
-                  showFormatToast('Formatvorlage kopiert: ' + (fmtClass ? fmtClass.replace('format-', '') : 'Standard'));
-                }
-              }
-              return;
-            }
-            // E = Format einfügen
-            if (lkey === 'e') {
-              if (!_copiedFormat) { showFormatToast('Keine Formatvorlage kopiert'); return; }
-              var sel = window.getSelection();
-              if (sel && sel.rangeCount > 0) {
-                var node = sel.anchorNode;
-                while (node && node !== editor && node.parentNode !== editor) node = node.parentNode;
-                if (node && node.classList) {
-                  Array.from(node.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { node.classList.remove(c); });
-                  node.classList.add(_copiedFormat);
-                  showFormatToast('Formatvorlage angewendet: ' + _copiedFormat.replace('format-', ''));
-                }
-              }
-              return;
-            }
-            // Unknown key - ignore
-            return;
-          }
-
           if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
             e.preventDefault();
             const selection = window.getSelection();
@@ -6681,72 +6725,6 @@ WICHTIGE REGELN:
             return;
           }
           
-          // Leader-Key Formatvorlagen: Esc aktiviert, dann Buchstabe wählt Format
-          if (e.key === 'Escape') {
-            if (_leaderActive) {
-              e.preventDefault();
-              e.stopPropagation();
-              cancelLeader();
-              return;
-            }
-            // Start leader mode if editor is focused and no modal is open
-            var anyModalOpen = document.querySelector('.modal-overlay');
-            if (!anyModalOpen) {
-              e.preventDefault();
-              e.stopPropagation();
-              startLeader();
-              return;
-            }
-          }
-
-          if (_leaderActive) {
-            e.preventDefault();
-            e.stopPropagation();
-            var lkey = e.key.toLowerCase();
-            cancelLeader();
-            // Format anwenden via LEADER_MAP
-            if (lkey in LEADER_MAP) {
-              var fmt = LEADER_MAP[lkey];
-              // F = figurenname maps to dialog format (Figurname → Dialog)
-              if (fmt === 'figurenname') fmt = 'dialog';
-              applyFormat(fmt);
-              showFormatToast('Format: ' + (FORMAT_NAMEN[LEADER_MAP[lkey]] || fmt));
-              return;
-            }
-            // K = Format kopieren
-            if (lkey === 'k') {
-              var sel = window.getSelection();
-              if (sel && sel.rangeCount > 0) {
-                var node = sel.anchorNode;
-                while (node && node !== editor && node.parentNode !== editor) node = node.parentNode;
-                if (node && node.classList) {
-                  var fmtClass = Array.from(node.classList).find(function(c) { return c.startsWith('format-'); });
-                  _copiedFormat = fmtClass || null;
-                  var name = fmtClass ? fmtClass.replace('format-', '') : 'Standard';
-                  showFormatToast('Formatvorlage kopiert: ' + name);
-                }
-              }
-              return;
-            }
-            // E = Format einfügen
-            if (lkey === 'e') {
-              if (!_copiedFormat) { showFormatToast('Keine Formatvorlage kopiert'); return; }
-              var fmtMap = {
-                'format-dialog': 'dialog', 'format-regieanweisung': 'regieanweisung',
-                'format-szene-titel': 'szeneTitel', 'format-akt-titel': 'aktTitel',
-                'format-lied': 'lied', 'format-vers': 'vers', 'format-pause': 'pause',
-                'format-standard': 'standard', 'format-musik': 'musik', 'format-sound': 'sound',
-                'format-notiz': 'notiz', 'format-nebentext': 'nebentext'
-              };
-              var format = fmtMap[_copiedFormat] || 'standard';
-              applyFormat(format);
-              showFormatToast('Formatvorlage angewendet: ' + format);
-              return;
-            }
-            // Unknown key - ignore
-            return;
-          }
-
           if (e.ctrlKey || e.metaKey) {
             // Undo/Redo
             if (e.key === 'z' && !e.shiftKey) {
