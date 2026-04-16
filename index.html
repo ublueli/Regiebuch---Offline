@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="app-build" content="rebu-2026-04-16T4">
+  <meta name="app-build" content="rebu-2026-04-16T5">
   <title>N!NA-Rebu v2.4 - Regiebuch mit KI (NINA-Exchange v2.0, Stand-alone)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
@@ -6217,16 +6217,41 @@ ${szene.zusammenfassung ? `Zusammenfassung: ${szene.zusammenfassung}` : ''}
         }
       }
       
-      // Alle Szenen (Übersicht mit Zusammenfassungen für dramaturgischen Bogen)
+      // Alle Szenen MIT DIALOGTEXT für dramaturgische Analyse
       if (state.szenen.length > 0) {
-        context += `\nALLE SZENEN – DRAMATURGISCHER ÜBERBLICK (${state.szenen.length}):\n`;
+        // Hilfsfunktion: HTML → lesbarer Text
+        const htmlToText = (html) => {
+          if (!html) return '';
+          return html
+            .replace(/<[^>]*class="[^"]*figur[^"]*"[^>]*>(.*?)<\/[^>]+>/gi, '\n$1: ')
+            .replace(/<[^>]*class="[^"]*figur-name[^"]*"[^>]*>(.*?)<\/[^>]+>/gi, '\n$1: ')
+            .replace(/<[^>]*class="[^"]*regie[^"]*"[^>]*>(.*?)<\/[^>]+>/gi, '($1) ')
+            .replace(/<\/?(p|div|br)[^>]*>/gi, '\n')
+            .replace(/<[^>]+>/g, '')
+            .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+        };
+
+        // Gesamtlänge berechnen für Smart-Kürzung
+        let totalTextLength = 0;
+        state.szenen.forEach(s => {
+          const txt = state.textbuch[s.id];
+          if (txt) totalTextLength += txt.length;
+        });
+        const maxPerScene = totalTextLength > 80000 ? 1500 : 0; // 0 = unbegrenzt
+
+        context += `\nALLE SZENEN MIT DIALOGEN – DRAMATURGISCHER ÜBERBLICK (${state.szenen.length}):\n`;
+        if (maxPerScene > 0) context += `(Hinweis: Dialoge pro Szene auf ${maxPerScene} Zeichen gekürzt — Stück ist sehr lang)\n`;
+        context += '\n';
+
         state.szenen.forEach((s, idx) => {
           const figurenNamen = s.figuren?.map(fId => {
             const f = state.figuren.find(fig => fig.id === fId);
             return f ? (f.kuerzel || f.name) : '';
           }).filter(Boolean).join(', ');
           const isAktiv = s.id === state.aktiveSzene;
-          context += `${isAktiv ? '→ ' : '- '}${s.nummer} "${s.titel}"${s.ort ? ` @ ${s.ort}` : ''}`;
+          context += `${isAktiv ? '→ ' : ''}${s.nummer} "${s.titel}"${s.ort ? ` @ ${s.ort}` : ''}`;
           if (figurenNamen) context += ` | Figuren: ${figurenNamen}`;
           if (s.zusammenfassung) {
             context += `\n  Zusammenfassung: ${s.zusammenfassung}`;
@@ -6234,7 +6259,18 @@ ${szene.zusammenfassung ? `Zusammenfassung: ${szene.zusammenfassung}` : ''}
           if (s.bemerkungen) {
             context += `\n  Regie-Bemerkungen: ${s.bemerkungen}`;
           }
-          context += '\n';
+          // Dialogtext der Szene
+          const szenenHtml = state.textbuch[s.id];
+          if (szenenHtml) {
+            let dialogText = htmlToText(szenenHtml);
+            if (maxPerScene > 0 && dialogText.length > maxPerScene) {
+              dialogText = dialogText.slice(0, maxPerScene) + '\n[... gekürzt, ' + dialogText.length + ' Zeichen insgesamt]';
+            }
+            if (dialogText) {
+              context += `\n  --- SZENENTEXT ---\n${dialogText}\n  --- ENDE ---`;
+            }
+          }
+          context += '\n\n';
         });
       }
       
