@@ -1720,8 +1720,9 @@
     // Fängt Esc und Folge-Tasten in ALLEN Editoren ab
     // =====================================================
     document.addEventListener('keydown', function(e) {
-      // Nur reagieren wenn ein Editor fokussiert ist
       var activeEl = document.activeElement;
+      console.log('[LEADER-DBG] KEYDOWN:', e.key, 'keyCode:', e.keyCode, 'target:', (activeEl ? activeEl.tagName + '.' + (activeEl.className || '').substring(0, 40) : 'null'), 'leaderActive:', _leaderActive);
+      // Nur reagieren wenn ein Editor fokussiert ist
       var inEditor = activeEl && (
         activeEl.id === 'text-editor' ||
         activeEl.classList.contains('fliesstext-editor') ||
@@ -1731,20 +1732,24 @@
       // Esc-Taste
       if (e.key === 'Escape') {
         if (_leaderActive) {
+          console.log('[LEADER-DBG] ESC → cancel leader');
           e.preventDefault();
           e.stopPropagation();
           cancelLeader();
           return;
         }
-        // Nur starten wenn Editor fokussiert und kein Modal offen
         if (inEditor) {
           var anyModal = document.querySelector('.modal-overlay');
+          console.log('[LEADER-DBG] ESC in editor, modal found:', anyModal ? 'YES' : 'NONE');
           if (!anyModal) {
+            console.log('[LEADER-DBG] ESC → START LEADER');
             e.preventDefault();
             e.stopPropagation();
             startLeader();
             return;
           }
+        } else {
+          console.log('[LEADER-DBG] ESC but NOT in editor, inEditor:', inEditor);
         }
         return;
       }
