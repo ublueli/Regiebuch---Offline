@@ -16902,7 +16902,7 @@ ${chunkText}`;
       const now = new Date();
       const datum = now.toISOString().slice(0, 10); // JJJJ-MM-TT
       const zeit = now.toTimeString().slice(0, 5).replace(':', '-'); // HH-MM
-      return `Rebu_${name}_${datum}_${zeit}.${ext}`;
+      return `${datum} Rebu ${name} ${typ}.${ext}`;
     }
     
     function downloadHTML(content, filename) {
