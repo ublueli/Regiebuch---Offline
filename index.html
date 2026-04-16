@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>N!NA-Rebu v2.4 - Regiebuch mit KI N!NA-Rebu v2.4 - Regiebuch mit KI, Cloud & NINA-Exchange v2.0 NINA-Exchange v2.0 (Stand-alone)</title>
+  <meta name="app-build" content="rebu-2026-04-16T1">
+  <title>N!NA-Rebu v2.4 - Regiebuch mit KI (NINA-Exchange v2.0, Stand-alone)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -17359,5 +17360,17 @@ const NINA_LOGO_BASE64 = '';
       });
     }
   </script>
+<script>
+// Build-Indikator — zeigt 5 Sekunden an, ob neue Version geladen ist
+(function(){
+  var b = document.querySelector('meta[name="app-build"]');
+  if (!b) return;
+  var d = document.createElement('div');
+  d.textContent = '✓ ' + b.content;
+  d.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#1e3a5f;color:#fff;padding:4px 10px;border-radius:4px;font-size:11px;z-index:99999;opacity:0.9;pointer-events:none;';
+  document.body.appendChild(d);
+  setTimeout(function(){ d.remove(); }, 5000);
+})();
+</script>
 </body>
 </html>
