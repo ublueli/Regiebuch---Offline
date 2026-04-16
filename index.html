@@ -1756,6 +1756,7 @@
 
       // Folge-Taste wenn Leader aktiv
       if (_leaderActive) {
+        console.log('[LEADER-DBG] Follow-up key:', e.key, 'lkey:', e.key.toLowerCase(), 'isSceneEditor:', !!(activeEl && activeEl.id === 'text-editor'), 'applyFormat exists:', typeof applyFormat);
         e.preventDefault();
         e.stopPropagation();
         var lkey = e.key.toLowerCase();
@@ -1767,11 +1768,15 @@
 
         // Format-Tasten
         if (lkey in LEADER_MAP) {
+          console.log('[LEADER-DBG] Applying format:', lkey, '→', LEADER_MAP[lkey]);
           if (isSceneEditor && typeof applyFormat === 'function') {
             var fmt = LEADER_MAP[lkey];
             if (fmt === 'figurenname') fmt = 'dialog';
+            console.log('[LEADER-DBG] Calling applyFormat("' + fmt + '") on scene editor');
             applyFormat(fmt);
+            console.log('[LEADER-DBG] applyFormat completed');
           } else if (isFliesstextEditor || inEditor) {
+            console.log('[LEADER-DBG] Using CSS class manipulation on fliesstext/contentEditable');
             // Direkte CSS-Klassen-Manipulation
             var fmtClassMap = {
               'f': 'format-dialog', 'd': 'format-dialog',
