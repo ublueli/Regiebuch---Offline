@@ -1401,11 +1401,12 @@
     const AUDIO_STORE_NAME = 'audioFiles';
     const IMAGE_STORE_NAME = 'imageFiles';
     const FASSUNGEN_STORE_NAME = 'fassungenStore'; // v3: Fassungen raus aus localStorage
+    const PROJECT_STORE_NAME = 'projectData';       // v4: ALLE Projektdaten in IndexedDB
 
     // IndexedDB initialisieren
     function initAudioDB() {
       return new Promise((resolve, reject) => {
-        const request = indexedDB.open(MEDIA_DB_NAME, 3); // Version 3 für Fassungen
+        const request = indexedDB.open(MEDIA_DB_NAME, 4); // Version 4 für Projektdaten
 
         request.onerror = () => {
           console.error('IndexedDB Fehler:', request.error);
@@ -1432,8 +1433,86 @@
             db.createObjectStore(FASSUNGEN_STORE_NAME, { keyPath: 'id' });
             console.log('✅ Fassungs-Speicher erstellt');
           }
+          if (!db.objectStoreNames.contains(PROJECT_STORE_NAME)) {
+            db.createObjectStore(PROJECT_STORE_NAME, { keyPath: 'id' });
+            console.log('✅ Projektdaten-Speicher erstellt');
+          }
         };
       });
+    }
+
+    // ============================================
+    // PROJEKTDATEN IN INDEXEDDB (v4)
+    // IndexedDB ist die FÜHRENDE Quelle für alle Projektdaten.
+    // localStorage dient nur noch als synchroner Best-Effort-Spiegel
+    // (Crash-Sicherheit bei kleinen Projekten) – sein 5-MB-Limit kann
+    // das Speichern damit nicht mehr blockieren.
+    // ============================================
+    async function saveProjectDataToDB(projektId, daten) {
+      if (!projektId) return false;
+      if (!mediaBD) await initAudioDB();
+      return new Promise((resolve) => {
+        try {
+          const tx = mediaBD.transaction([PROJECT_STORE_NAME], 'readwrite');
+          const store = tx.objectStore(PROJECT_STORE_NAME);
+          const req = store.put({ id: projektId, daten: daten, savedAt: new Date().toISOString() });
+          req.onsuccess = () => resolve(true);
+          req.onerror = () => { console.error('Projektdaten-Speicherfehler:', req.error); resolve(false); };
+        } catch (e) {
+          console.error('Projektdaten-Speicherfehler:', e);
+          resolve(false);
+        }
+      });
+    }
+
+    async function loadProjectDataFromDB(projektId) {
+      if (!projektId) return null;
+      if (!mediaBD) await initAudioDB();
+      return new Promise((resolve) => {
+        try {
+          const tx = mediaBD.transaction([PROJECT_STORE_NAME], 'readonly');
+          const store = tx.objectStore(PROJECT_STORE_NAME);
+          const req = store.get(projektId);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => resolve(null);
+        } catch (e) { resolve(null); }
+      });
+    }
+
+    async function deleteProjectDataFromDB(projektId) {
+      if (!projektId) return;
+      if (!mediaBD) await initAudioDB();
+      return new Promise((resolve) => {
+        try {
+          const tx = mediaBD.transaction([PROJECT_STORE_NAME], 'readwrite');
+          const store = tx.objectStore(PROJECT_STORE_NAME);
+          const req = store.delete(projektId);
+          req.onsuccess = () => resolve();
+          req.onerror = () => resolve();
+        } catch (e) { resolve(); }
+      });
+    }
+
+    // Aktuellen Projekt-State als Datenobjekt einsammeln (alle Bereiche)
+    function collectProjektDaten() {
+      return {
+        projektMeta: state.projektMeta,
+        figuren: state.figuren,
+        szenen: state.szenen,
+        textbuch: state.textbuch,
+        cues: state.cues,
+        requisiten: state.requisiten,
+        kostueme: state.kostueme,
+        medien: state.medien.map(m => { const k = Object.assign({}, m); delete k.localFileUrl; return k; }),
+        buehne: state.buehne,
+        konzept: state.konzept,
+        beziehungen: state.beziehungen,
+        rechercheMaterial: state.rechercheMaterial,
+        musikkonzept: state.musikkonzept,
+        ensemble: state.ensemble,
+        team: state.team,
+        probeplan: state.probeplan,
+      };
     }
 
     // ============================================
@@ -3436,6 +3515,9 @@ was morgen kommt – wer ist dabei?</p>
       loadProjektDaten();
     }
 
+    // Lauf-Token gegen Races bei schnellen Projektwechseln
+    let _projektLoadToken = 0;
+
     function loadProjektDaten() {
       if (!state.projektId) return;
       
@@ -3559,6 +3641,47 @@ was morgen kommt – wer ist dabei?</p>
       state.dirty = false; // Frisch geladen, keine ungespeicherten Änderungen
       updateHeaderStatus();
 
+      // INDEXEDDB IST FÜHREND: Die soeben synchron geladenen localStorage-Daten
+      // sind nur der (evtl. veraltete/unvollständige) Spiegel. Sobald der
+      // IndexedDB-Datensatz da ist, ersetzt er den Spiegel-Stand.
+      // Existiert noch kein Datensatz (erste Nutzung der neuen Version),
+      // werden die localStorage-Daten einmalig nach IndexedDB migriert.
+      const myToken = ++_projektLoadToken;
+      (function(pid) {
+        loadProjectDataFromDB(pid).then(record => {
+          if (state.projektId !== pid || _projektLoadToken !== myToken) return; // inzwischen gewechselt
+          if (record && record.daten) {
+            const bereiche = ['projektMeta', 'figuren', 'szenen', 'textbuch', 'cues',
+              'requisiten', 'kostueme', 'medien', 'buehne', 'konzept', 'beziehungen',
+              'rechercheMaterial', 'musikkonzept', 'ensemble', 'team', 'probeplan'];
+            let geaendert = false;
+            bereiche.forEach(b => {
+              if (record.daten[b] === undefined) return;
+              try {
+                if (JSON.stringify(state[b]) !== JSON.stringify(record.daten[b])) {
+                  state[b] = record.daten[b];
+                  geaendert = true;
+                }
+              } catch (e) { /* Vergleich fehlgeschlagen: Spiegel-Stand behalten */ }
+            });
+            if (geaendert) {
+              if (!state.projektMeta.eigeneGruppen) state.projektMeta.eigeneGruppen = ['Erster Akt'];
+              if (state.szenen.length > 0 && !state.szenen.find(s => s.id === state.aktiveSzene)) {
+                state.aktiveSzene = state.szenen[0].id;
+              }
+              restoreAudioUrls().catch(() => {});
+              render();
+              console.log('✅ Projektdaten aus IndexedDB übernommen (führende Quelle)');
+            }
+          } else {
+            // Migration: localStorage-Stand einmalig nach IndexedDB schreiben
+            saveProjectDataToDB(pid, collectProjektDaten()).then(ok => {
+              if (ok) console.log('✅ Migration: Projektdaten nach IndexedDB übernommen');
+            });
+          }
+        }).catch(e => console.warn('Projektdaten aus IndexedDB nicht ladbar:', e));
+      })(state.projektId);
+
       // Migration: Base64-Recherche-Bilder nach IndexedDB (async, nicht blockierend)
       migrateRechercheBilder().catch(e => console.warn('Recherche-Bild-Migration:', e));
     }
@@ -3653,34 +3776,58 @@ was morgen kommt – wer ist dabei?</p>
       });
     }
 
+    // Merker: localStorage-Spiegel deaktiviert (Projekt zu gross fürs 5-MB-Limit)
+    let _lsMirrorDisabled = false;
+
     function saveProjektDaten() {
       if (!state.projektId) return false;
-      
+
       state.dirty = true; // Änderungen seit letztem Export
-      
-      // Alle Saves sammeln und Fehler zählen
-      const results = [
-        save(KEYS.projektMeta(state.projektId), state.projektMeta),
-        save(KEYS.figuren(state.projektId), state.figuren),
-        save(KEYS.szenen(state.projektId), state.szenen),
-        save(KEYS.textbuch(state.projektId), state.textbuch),
-        save(KEYS.cues(state.projektId), state.cues),
-        save(KEYS.requisiten(state.projektId), state.requisiten),
-        save(KEYS.kostueme(state.projektId), state.kostueme),
-        save(KEYS.medien(state.projektId), state.medien),
-        save(KEYS.buehne(state.projektId), state.buehne),
-        // v3.0
-        save(KEYS.konzept(state.projektId), state.konzept),
-        save(KEYS.beziehungen(state.projektId), state.beziehungen),
-        save(KEYS.rechercheMaterial(state.projektId), state.rechercheMaterial),
-        save(KEYS.musikkonzept(state.projektId), state.musikkonzept),
-        save(KEYS.ensemble(state.projektId), state.ensemble),
-        save(KEYS.team(state.projektId), state.team),
-        save(KEYS.probeplan(state.projektId), state.probeplan),
-      ];
-      
-      const failCount = results.filter(r => !r).length;
-      const allOk = failCount === 0;
+
+      // 1) INDEXEDDB – die führende Quelle (kein 5-MB-Limit, blockiert nie)
+      const daten = collectProjektDaten();
+      saveProjectDataToDB(state.projektId, daten).then(ok => {
+        if (!ok) {
+          showAutosaveIndicator(false);
+          console.error('⚠️ Projektdaten konnten nicht in IndexedDB gespeichert werden!');
+          if (!state._lastStorageWarning || Date.now() - state._lastStorageWarning > STORAGE_WARNING_DEBOUNCE_MS) {
+            state._lastStorageWarning = Date.now();
+            alert('⚠️ Speichern fehlgeschlagen!\n\n' +
+                  'Die Projektdaten konnten nicht in der Browser-Datenbank gesichert werden.\n\n' +
+                  'Bitte SOFORT ein Backup exportieren (💾 Sichern unter / Komplett-Backup ZIP)!');
+          }
+        }
+      });
+
+      // 2) LOCALSTORAGE – synchroner Best-Effort-Spiegel (Crash-Sicherheit).
+      // Scheitert er (Quota), ist das kein Problem mehr: IndexedDB hat die Daten.
+      if (!_lsMirrorDisabled) {
+        const results = [
+          save(KEYS.projektMeta(state.projektId), state.projektMeta),
+          save(KEYS.figuren(state.projektId), state.figuren),
+          save(KEYS.szenen(state.projektId), state.szenen),
+          save(KEYS.textbuch(state.projektId), state.textbuch),
+          save(KEYS.cues(state.projektId), state.cues),
+          save(KEYS.requisiten(state.projektId), state.requisiten),
+          save(KEYS.kostueme(state.projektId), state.kostueme),
+          save(KEYS.medien(state.projektId), state.medien),
+          save(KEYS.buehne(state.projektId), state.buehne),
+          // v3.0
+          save(KEYS.konzept(state.projektId), state.konzept),
+          save(KEYS.beziehungen(state.projektId), state.beziehungen),
+          save(KEYS.rechercheMaterial(state.projektId), state.rechercheMaterial),
+          save(KEYS.musikkonzept(state.projektId), state.musikkonzept),
+          save(KEYS.ensemble(state.projektId), state.ensemble),
+          save(KEYS.team(state.projektId), state.team),
+          save(KEYS.probeplan(state.projektId), state.probeplan),
+        ];
+        if (results.some(r => !r)) {
+          // Spiegel passt nicht mehr ins localStorage → für diese Sitzung deaktivieren
+          // (verhindert wiederholte teure Fehlversuche bei jedem Autosave)
+          _lsMirrorDisabled = true;
+          console.info('ℹ️ Projekt zu gross für den localStorage-Spiegel – IndexedDB übernimmt allein. Kein Datenverlust.');
+        }
+      }
 
       // Fassungen liegen in IndexedDB (kein localStorage-Quota-Risiko).
       // Nur schreiben, wenn sie sich geändert haben – die Kopie ist gross!
@@ -3697,20 +3844,9 @@ was morgen kommt – wer ist dabei?</p>
       // Zeitstempel für Crash Recovery
       try { localStorage.setItem(KEYS.lastSaved, new Date().toISOString()); } catch(e) {}
 
-      // Autosave-Indikator — ehrliches Feedback
-      showAutosaveIndicator(allOk);
-      
-      if (!allOk) {
-        console.error(`⚠️ ${failCount} von ${results.length} Speichervorgängen fehlgeschlagen!`);
-        // Nur einmal warnen, nicht bei jedem Keystroke
-        if (!state._lastStorageWarning || Date.now() - state._lastStorageWarning > STORAGE_WARNING_DEBOUNCE_MS) {
-          state._lastStorageWarning = Date.now();
-          alert('⚠️ Speicher voll!\n\n' + failCount + ' Datenbereiche konnten NICHT gespeichert werden.\n\n' +
-                'Bitte SOFORT ein Backup exportieren (💾 Sichern unter) und ungenutzte Projekte löschen!\n\n' +
-                'WICHTIG: Ohne Backup droht Datenverlust!');
-        }
-      }
-      
+      // Autosave-Indikator (bei IndexedDB-Fehler wird er oben async korrigiert)
+      showAutosaveIndicator(true);
+
       // v2.2: Auto-Sync zur Cloud (wenn Cloud-Projekt)
       scheduleSyncToCloud();
 
@@ -3718,7 +3854,7 @@ was morgen kommt – wer ist dabei?</p>
       scheduleAutoFileSave();
       startSaveReminder();
 
-      return allOk;
+      return true;
     }
     
     // Debounced Version für Editor-Input (verhindert 17× localStorage pro Sekunde)
@@ -3945,7 +4081,7 @@ was morgen kommt – wer ist dabei?</p>
       }
 
       const text = await rebuEntry.async('string');
-      await importFromDramera(JSON.parse(text));
+      await oeffneProjektAusDaten(JSON.parse(text));
     }
 
     let autosaveTimeout = null;
@@ -4050,7 +4186,10 @@ was morgen kommt – wer ist dabei?</p>
       state.projektId = projektId;
       state.aktiveSzene = null;
       loadProjektDaten();
-      
+
+      // Audio-/Video-Verknüpfungen des neuen Projekts wiederherstellen
+      restoreAudioUrls().catch(() => {});
+
       render();
     }
     
@@ -4545,8 +4684,9 @@ was morgen kommt – wer ist dabei?</p>
       ];
       projektKeyFns.forEach(fn => localStorage.removeItem(KEYS[fn](projektId)));
 
-      // Fassungen des Projekts aus IndexedDB löschen
+      // Fassungen und Projektdaten des Projekts aus IndexedDB löschen
       deleteFassungenFromDB(projektId).catch(() => {});
+      deleteProjectDataFromDB(projektId).catch(() => {});
 
       // IndexedDB-Medien zum Projekt aufräumen
       try {
@@ -4586,9 +4726,43 @@ was morgen kommt – wer ist dabei?</p>
     async function importFromDramera(jsonData) {
       try {
         const dramera = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
-        
+
         if (dramera.data) {
           const d = dramera.data;
+
+          // Laufende asynchrone Projektdaten-Ladungen entwerten –
+          // sonst könnte ein alter IndexedDB-Stand den Import überschreiben
+          _projektLoadToken++;
+
+          // BUGFIX DATENVERMISCHUNG: Vor dem Import ALLE Bereiche leeren.
+          // Vorher blieben Daten des zuvor geladenen Projekts erhalten, wenn
+          // die Datei den Bereich nicht enthielt (z.B. Requisiten von Projekt A
+          // tauchten nach dem Öffnen von Projekt B dort auf und wurden mitgespeichert).
+          state.projektMeta = {
+            titel: 'Importiertes Projekt', untertitel: '', autor: '', tagline: '',
+            logline: '', copyright: '', titelbild: '', fassung: 'Arbeitsfassung',
+            fassungsDatum: new Date().toISOString(), eigeneGruppen: ['Erster Akt'],
+            premiere: '', spielort: ''
+          };
+          state.figuren = [];
+          state.szenen = [];
+          state.textbuch = {};
+          state.cues = [];
+          state.requisiten = [];
+          state.kostueme = [];
+          state.medien = [];
+          state.buehne = [];
+          state.fassungen = [];
+          state._fassungenDirty = true;
+          state.konzept = { treatment: [], fundament: { kern: '', logline: '', unaussprechliches: '', emotionalerBogen: '', konflikt: '' }, werte: [], motive: [] };
+          state.beziehungen = [];
+          state.rechercheMaterial = [];
+          state.musikkonzept = { text: '', stuecke: [] };
+          state.ensemble = [];
+          state.team = [];
+          state.probeplan = [];
+          state.aktiveSzene = null;
+          state.referenzFassungId = null;
           state.projektMeta.titel = d.projektName || state.projektMeta.titel;
           
           // ProjektMeta wiederherstellen (wenn vorhanden)
@@ -4762,6 +4936,37 @@ was morgen kommt – wer ist dabei?</p>
       } catch (e) {
         console.error('Import-Fehler:', e);
         alert('❌ Import fehlgeschlagen: ' + e.message);
+      }
+    }
+
+    // Projektdatei in einem EIGENEN Projekt-Slot öffnen (Bugfix Datenvermischung):
+    // Vorher landeten alle per Datei geöffneten Projekte im selben Browser-Projekt –
+    // «Tschingge» und «Brandbode» überschrieben sich gegenseitig bzw. vermischten sich.
+    // Neu: Pro Projektname ein eigener Slot; existiert er, wird dorthin gewechselt.
+    async function oeffneProjektAusDaten(data) {
+      const dramera = typeof data === 'string' ? JSON.parse(data) : data;
+      const name = dramera?.data?.projektName || dramera?.data?.projektMeta?.titel || 'Importiertes Projekt';
+
+      const projekte = load(KEYS.projekte, []);
+      let projekt = projekte.find(p => (p.name || p.titel) === name);
+      if (!projekt) {
+        projekt = { id: genId(), name: name, erstellt: new Date().toISOString() };
+        projekte.push(projekt);
+        save(KEYS.projekte, projekte);
+      }
+      if (projekt.id !== state.projektId) {
+        wechsleProjekt(projekt.id); // sichert das bisherige Projekt und wechselt
+      }
+
+      await importFromDramera(dramera);
+
+      // Projektlisten-Eintrag aktualisieren (Name/Zeitstempel)
+      const liste = load(KEYS.projekte, []);
+      const eintrag = liste.find(p => p.id === state.projektId);
+      if (eintrag) {
+        eintrag.name = state.projektMeta.titel || eintrag.name;
+        eintrag.geaendert = new Date().toISOString();
+        save(KEYS.projekte, liste);
       }
     }
 
@@ -10055,12 +10260,14 @@ WICHTIGE REGELN:
 
       try {
         const info = await getAudioStorageInfo();
-        // Auch die localStorage-Auslastung anzeigen – dort sitzt das Quota-Limit
+        // localStorage ist nur noch der Spiegel – die Daten liegen sicher in IndexedDB
         const lsMB = parseFloat(getStorageUsageMB());
-        const lsWarnung = lsMB > 4 ? ' <span style="color:#dc2626;font-weight:600;">⚠ knapp!</span>' : '';
+        const lsHinweis = _lsMirrorDisabled
+          ? ' <span style="color:#6b7280;">(Spiegel voll – Daten sicher in der Browser-Datenbank)</span>'
+          : '';
         infoEl.innerHTML = `
           <div>💾 ${info.count} Mediendatei${info.count !== 1 ? 'en' : ''} gespeichert (${info.totalSizeMB} MB)</div>
-          <div>Projektspeicher: ${lsMB} MB${lsWarnung}</div>
+          <div>Projektspeicher (Spiegel): ${lsMB} MB${lsHinweis}</div>
         `;
       } catch (e) {
         infoEl.innerHTML = '';
@@ -11489,7 +11696,10 @@ WICHTIGE REGELN:
     // ============================================
     async function doImportNina() {
       if (!ninaImportData) return;
-      
+
+      // Laufende asynchrone Projektdaten-Ladungen entwerten (Race-Schutz)
+      _projektLoadToken++;
+
       const data = ninaImportData;
       const projektId = state.projektId;
       
@@ -17690,7 +17900,8 @@ ${chunkText}`;
       }
       
       try {
-        importFromDramera(pendingImportData);
+        // Eigener Projekt-Slot pro Projektname (verhindert Datenvermischung)
+        oeffneProjektAusDaten(pendingImportData).catch(err => alert('Fehler beim Import: ' + err.message));
         pendingImportData = null;
         closeModal('showImportModal');
       } catch (err) {
@@ -17890,13 +18101,14 @@ ${chunkText}`;
               if (data._app === 'dramera') {
                 if (!confirm('Diese Datei stammt aus Dramera. Möchtest du sie über das Exchange-Format importieren?')) return;
               }
-              importFromDramera(data);
-              closeModal('showOeffnenModal');
-              savedFileHandle = handle;
-              state.filePath = handle.name;
-              state.dirty = false;
-              state.lastFileSaveTime = null;
-              updateHeaderStatus();
+              return oeffneProjektAusDaten(data).then(function() {
+                closeModal('showOeffnenModal');
+                savedFileHandle = handle;
+                state.filePath = handle.name;
+                state.dirty = false;
+                state.lastFileSaveTime = null;
+                updateHeaderStatus();
+              });
             });
           });
         }).catch(function(err) {
@@ -17928,10 +18140,13 @@ ${chunkText}`;
             if (data._app === 'dramera') {
               if (!confirm('Diese Datei stammt aus Dramera. Möchtest du sie über das Exchange-Format importieren?')) return;
             }
-            importFromDramera(data);
-            closeModal('showOeffnenModal');
-            state.dirty = false;
-            updateHeaderStatus();
+            oeffneProjektAusDaten(data).then(function() {
+              closeModal('showOeffnenModal');
+              state.dirty = false;
+              updateHeaderStatus();
+            }).catch(function(err) {
+              alert('Fehler beim Öffnen: ' + err.message);
+            });
           } catch(err) {
             alert('Fehler beim Öffnen: ' + err.message);
           }
@@ -17945,10 +18160,8 @@ ${chunkText}`;
     
     // Projekt aus lokaler Liste laden
     function ladeProjektVonListe(projektId) {
-      if (state.dirty) {
-        if (!confirm('Ungesicherte Änderungen verwerfen?')) return;
-      }
-      loadProjekt(projektId);
+      // BUGFIX: rief vorher das nicht existierende loadProjekt() auf → Klick tat nichts
+      wechsleProjekt(projektId);
     }
     
     // --- Sichern-Unter Modal ---
