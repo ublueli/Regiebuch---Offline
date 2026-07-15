@@ -271,6 +271,17 @@
     /* Mark-Tags neutralisieren (Word-Artefakte) */
     mark { background: none; color: inherit; }
     
+    /* Figurenname als eigenständiger Absatz (Fliesstext-Modus, Esc+F) */
+    .format-figurenname {
+      font-family: 'Trebuchet MS', 'Segoe UI', sans-serif !important;
+      font-size: 10pt !important;
+      font-weight: 700 !important;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin: 0.35rem 0 0.05rem 0;
+      color: #212121 !important;
+    }
+
     /* Dialog: FIGURENNAME oben, Text darunter eingerückt (wie Word-Export) */
     .format-dialog {
       margin: 0 0 0.2rem 0;
@@ -1244,6 +1255,11 @@
       } 
     };
     
+    // Cloud ist in der Stand-alone-Version deaktiviert.
+    // Solange dieses Flag false ist, wird keine Cloud-UI angeboten
+    // (vorher konnten Nutzer in einen Login-Flow laufen, der garantiert scheitert).
+    const CLOUD_ENABLED = false;
+
     let cloudUser = null;
     let cloudProjects = [];
     let currentCloudProjectId = null;
@@ -1285,12 +1301,26 @@
           }
         }
       }
-      // Twin-Bridge Daten aufräumen (können sehr gross sein)
+      // Twin-Bridge Daten aufräumen (komplette Projektkopie, kann sehr gross sein).
+      // Nicht löschen, wenn gerade ein Twin-Import über die URL ansteht.
       try {
-        var bridge = localStorage.getItem('nina-twin-bridge');
-        if (bridge && bridge.length > 1000) {
+        var twinImportPending = new URLSearchParams(window.location.search).get('twin') === 'import';
+        if (!twinImportPending && localStorage.getItem('nina-twin-bridge') !== null) {
           localStorage.removeItem('nina-twin-bridge');
           removed++;
+        }
+      } catch(e) {}
+      // Legacy: Fassungen-Keys, die bereits nach IndexedDB migriert wurden,
+      // können im Notfall gefahrlos entfernt werden (IndexedDB ist führend).
+      try {
+        if (window._fassungenMigrated) {
+          for (var m = localStorage.length - 1; m >= 0; m--) {
+            var mk = localStorage.key(m);
+            if (mk && mk.startsWith(STORAGE_PREFIX + 'fassungen_')) {
+              localStorage.removeItem(mk);
+              removed++;
+            }
+          }
         }
       } catch(e) {}
       if (removed > 0) console.log('🧹 Storage Cleanup: ' + removed + ' verwaiste Keys entfernt, jetzt ' + getStorageUsageMB() + ' MB');
@@ -1370,23 +1400,24 @@
     const MEDIA_DB_NAME = 'NinaRebuMediaDB';
     const AUDIO_STORE_NAME = 'audioFiles';
     const IMAGE_STORE_NAME = 'imageFiles';
-    
+    const FASSUNGEN_STORE_NAME = 'fassungenStore'; // v3: Fassungen raus aus localStorage
+
     // IndexedDB initialisieren
     function initAudioDB() {
       return new Promise((resolve, reject) => {
-        const request = indexedDB.open(MEDIA_DB_NAME, 2); // Version 2 für Images
-        
+        const request = indexedDB.open(MEDIA_DB_NAME, 3); // Version 3 für Fassungen
+
         request.onerror = () => {
           console.error('IndexedDB Fehler:', request.error);
           reject(request.error);
         };
-        
+
         request.onsuccess = () => {
           mediaBD = request.result;
           console.log('✅ Medien-Datenbank bereit');
           resolve(mediaBD);
         };
-        
+
         request.onupgradeneeded = (event) => {
           const db = event.target.result;
           if (!db.objectStoreNames.contains(AUDIO_STORE_NAME)) {
@@ -1397,8 +1428,87 @@
             db.createObjectStore(IMAGE_STORE_NAME, { keyPath: 'id' });
             console.log('✅ Bild-Speicher erstellt');
           }
+          if (!db.objectStoreNames.contains(FASSUNGEN_STORE_NAME)) {
+            db.createObjectStore(FASSUNGEN_STORE_NAME, { keyPath: 'id' });
+            console.log('✅ Fassungs-Speicher erstellt');
+          }
         };
       });
+    }
+
+    // ============================================
+    // FASSUNGEN IN INDEXEDDB (v3)
+    // Fassungen sind der grösste Speicherfresser (bis 20 Volltext-Kopien).
+    // Sie liegen neu in IndexedDB statt localStorage.
+    // ============================================
+    async function saveFassungenToDB(projektId, fassungen) {
+      if (!projektId) return false;
+      if (!mediaBD) await initAudioDB();
+      return new Promise((resolve) => {
+        try {
+          const tx = mediaBD.transaction([FASSUNGEN_STORE_NAME], 'readwrite');
+          const store = tx.objectStore(FASSUNGEN_STORE_NAME);
+          const req = store.put({
+            id: projektId,
+            fassungen: JSON.parse(JSON.stringify(fassungen || [])),
+            savedAt: new Date().toISOString()
+          });
+          req.onsuccess = () => resolve(true);
+          req.onerror = () => { console.error('Fassungen-Speicherfehler:', req.error); resolve(false); };
+        } catch (e) {
+          console.error('Fassungen-Speicherfehler:', e);
+          resolve(false);
+        }
+      });
+    }
+
+    async function loadFassungenFromDB(projektId) {
+      if (!projektId) return null;
+      if (!mediaBD) await initAudioDB();
+      return new Promise((resolve) => {
+        try {
+          const tx = mediaBD.transaction([FASSUNGEN_STORE_NAME], 'readonly');
+          const store = tx.objectStore(FASSUNGEN_STORE_NAME);
+          const req = store.get(projektId);
+          req.onsuccess = () => resolve(req.result ? (req.result.fassungen || []) : null);
+          req.onerror = () => resolve(null);
+        } catch (e) { resolve(null); }
+      });
+    }
+
+    async function deleteFassungenFromDB(projektId) {
+      if (!projektId) return;
+      if (!mediaBD) await initAudioDB();
+      return new Promise((resolve) => {
+        try {
+          const tx = mediaBD.transaction([FASSUNGEN_STORE_NAME], 'readwrite');
+          const store = tx.objectStore(FASSUNGEN_STORE_NAME);
+          const req = store.delete(projektId);
+          req.onsuccess = () => resolve();
+          req.onerror = () => resolve();
+        } catch (e) { resolve(); }
+      });
+    }
+
+    // Einmalige Migration: Fassungen aus localStorage nach IndexedDB verschieben.
+    // Gibt die migrierten Fassungen zurück (oder null, wenn nichts zu migrieren war).
+    async function migrateFassungenToDB(projektId) {
+      if (!projektId) return null;
+      const lsKey = KEYS.fassungen(projektId);
+      let legacy = null;
+      try { legacy = JSON.parse(localStorage.getItem(lsKey)); } catch (e) {}
+      if (!legacy || !Array.isArray(legacy) || legacy.length === 0) {
+        // Nichts (mehr) im localStorage – ggf. leeren Rest-Key entfernen
+        if (localStorage.getItem(lsKey) !== null) localStorage.removeItem(lsKey);
+        return null;
+      }
+      const ok = await saveFassungenToDB(projektId, legacy);
+      if (ok) {
+        localStorage.removeItem(lsKey);
+        console.log('✅ Migration: ' + legacy.length + ' Fassungen nach IndexedDB verschoben (' + getStorageUsageMB() + ' MB localStorage frei)');
+        return legacy;
+      }
+      return legacy; // Migration fehlgeschlagen: Daten bleiben im localStorage
     }
     
     // Audio-Datei speichern
@@ -1474,20 +1584,38 @@
     // Alle Audio-URLs beim Start wiederherstellen
     async function restoreAudioUrls() {
       if (!mediaBD) await initAudioDB();
-      
+
+      let repariert = 0;
       for (const medium of state.medien) {
-        if (medium.type === 'audio' && medium.source === 'local') {
-          try {
-            const result = await loadAudioFromDB(medium.id);
-            if (result) {
-              medium.localFileUrl = result.url;
-              medium.audioStored = true;
-              console.log('✅ Audio wiederhergestellt:', medium.name);
+        const istLokalesMedium = (medium.type === 'audio' || medium.type === 'video') && medium.source === 'local';
+        try {
+          const result = await loadAudioFromDB(medium.id);
+          if (result) {
+            // AUTO-REPARATUR: Nach einem alten Backup-Import fehlen type/source/name –
+            // die Binärdaten liegen aber noch in IndexedDB. Felder wiederherstellen.
+            if (!istLokalesMedium) {
+              const mime = result.data && result.data.type ? result.data.type : '';
+              medium.type = mime.startsWith('video/') ? 'video' : 'audio';
+              medium.source = 'local';
+              if (!medium.name) medium.name = (result.data && result.data.name ? result.data.name.replace(/\.[^/.]+$/, '') : (medium.titel || 'Medium'));
+              if (!medium.filename && result.data) medium.filename = result.data.name || '';
+              if (!medium.szenen) medium.szenen = [];
+              repariert++;
             }
-          } catch (e) {
-            console.warn('Audio nicht gefunden:', medium.name);
+            medium.localFileUrl = result.url;
+            medium.audioStored = true;
+            console.log('✅ Medium wiederhergestellt:', medium.name);
+          } else if (istLokalesMedium) {
+            console.warn('Medium nicht in IndexedDB gefunden:', medium.name);
           }
+        } catch (e) {
+          if (istLokalesMedium) console.warn('Medium nicht gefunden:', medium.name);
         }
+      }
+      if (repariert > 0) {
+        console.log('🔧 ' + repariert + ' Medien-Verknüpfungen automatisch repariert');
+        saveProjektDaten();
+        render();
       }
     }
     
@@ -1833,7 +1961,9 @@
         // Format-Tasten
         if (lkey in LEADER_MAP) {
           if (ctxIsScene && typeof applyFormat === 'function') {
-            applyFormat(LEADER_MAP[lkey]);
+            // Gesicherten Kontext übergeben: Chrome verwirft die Selektion bei Esc,
+            // ohne ctxNode lief applyFormat dann ins Leere (Shortcut "tat nichts")
+            applyFormat(LEADER_MAP[lkey], ctxNode);
           } else if ((ctxIsFliesstext || ctx.inEditor) && ctxNode && ctxNode.classList) {
             // Use saved node (Chrome clears selection when Esc blurs contentEditable)
             var fmtClassMap = {
@@ -1869,7 +1999,7 @@
               'format-akt-titel': 'aktTitel', 'format-lied': 'lied',
               'format-vers': 'vers', 'format-pause': 'pause', 'format-standard': 'standard'
             };
-            applyFormat(fmtMap[_copiedFormat] || 'standard');
+            applyFormat(fmtMap[_copiedFormat] || 'standard', ctxNode);
           } else if (ctxNode && ctxNode.classList) {
             Array.from(ctxNode.classList).filter(function(c) { return c.startsWith('format-'); }).forEach(function(c) { ctxNode.classList.remove(c); });
             ctxNode.classList.add(_copiedFormat);
@@ -2406,6 +2536,12 @@
 
         closeModal('showTwinModal');
         window.open(DRAMERA_URL + '?twin=import&source=rebu', '_blank');
+
+        // Bridge-Daten (komplette Projektkopie!) nach kurzer Zeit wieder entfernen,
+        // damit sie nicht dauerhaft localStorage-Platz belegen
+        setTimeout(function() {
+          try { localStorage.removeItem(TWIN_BRIDGE_KEY); } catch (e) {}
+        }, 60000);
       } catch (e) {
         console.error('Twin Bridge Fehler:', e);
         alert('Fehler beim Transfer: ' + e.message + '\n\nVersuche stattdessen den Datei-Download.');
@@ -3335,7 +3471,37 @@ was morgen kommt – wer ist dabei?</p>
       state.szenen = load(KEYS.szenen(state.projektId), []);
       state.textbuch = load(KEYS.textbuch(state.projektId), {});
       state.cues = load(KEYS.cues(state.projektId), []);
+      // Fassungen liegen neu in IndexedDB (localStorage-Quota-Problem).
+      // Zuerst evtl. vorhandene Legacy-Daten aus localStorage anzeigen,
+      // dann asynchron aus IndexedDB laden bzw. dorthin migrieren.
       state.fassungen = load(KEYS.fassungen(state.projektId), []);
+      (function(pid) {
+        loadFassungenFromDB(pid).then(async (idbFassungen) => {
+          if (state.projektId !== pid) return; // Projekt inzwischen gewechselt
+          const legacy = load(KEYS.fassungen(pid), []);
+          if (idbFassungen && idbFassungen.length > 0) {
+            // IndexedDB ist führend; evtl. übrige Legacy-Fassungen (per id) ergänzen
+            const bekannt = new Set(idbFassungen.map(f => f.id));
+            const zusatz = (legacy || []).filter(f => f && f.id && !bekannt.has(f.id));
+            let merged = idbFassungen.concat(zusatz);
+            if (zusatz.length > 0) {
+              merged.sort((a, b) => new Date(a.datum || 0) - new Date(b.datum || 0));
+              await saveFassungenToDB(pid, merged);
+            }
+            state.fassungen = merged;
+            if (localStorage.getItem(KEYS.fassungen(pid)) !== null) localStorage.removeItem(KEYS.fassungen(pid));
+            window._fassungenMigrated = true;
+            if (state.currentView === 'fassungen') render();
+          } else {
+            const migrated = await migrateFassungenToDB(pid);
+            if (migrated && state.projektId === pid) {
+              state.fassungen = migrated;
+              window._fassungenMigrated = true;
+              if (state.currentView === 'fassungen') render();
+            }
+          }
+        }).catch((e) => { console.warn('Fassungen konnten nicht aus IndexedDB geladen werden:', e); });
+      })(state.projektId);
       state.requisiten = load(KEYS.requisiten(state.projektId), []);
       state.kostueme = load(KEYS.kostueme(state.projektId), []);
       state.medien = load(KEYS.medien(state.projektId), []);
@@ -3392,8 +3558,11 @@ was morgen kommt – wer ist dabei?</p>
       
       state.dirty = false; // Frisch geladen, keine ungespeicherten Änderungen
       updateHeaderStatus();
+
+      // Migration: Base64-Recherche-Bilder nach IndexedDB (async, nicht blockierend)
+      migrateRechercheBilder().catch(e => console.warn('Recherche-Bild-Migration:', e));
     }
-    
+
     // v2.0: Aktuelle Gruppen des Projekts holen (eigene + aus Szenen extrahierte)
     function getAktuelleGruppen() {
       const eigene = state.projektMeta.eigeneGruppen || [];
@@ -3496,7 +3665,6 @@ was morgen kommt – wer ist dabei?</p>
         save(KEYS.szenen(state.projektId), state.szenen),
         save(KEYS.textbuch(state.projektId), state.textbuch),
         save(KEYS.cues(state.projektId), state.cues),
-        save(KEYS.fassungen(state.projektId), state.fassungen),
         save(KEYS.requisiten(state.projektId), state.requisiten),
         save(KEYS.kostueme(state.projektId), state.kostueme),
         save(KEYS.medien(state.projektId), state.medien),
@@ -3513,6 +3681,18 @@ was morgen kommt – wer ist dabei?</p>
       
       const failCount = results.filter(r => !r).length;
       const allOk = failCount === 0;
+
+      // Fassungen liegen in IndexedDB (kein localStorage-Quota-Risiko).
+      // Nur schreiben, wenn sie sich geändert haben – die Kopie ist gross!
+      if (state._fassungenDirty) {
+        state._fassungenDirty = false;
+        saveFassungenToDB(state.projektId, state.fassungen).then(ok => {
+          if (!ok) {
+            state._fassungenDirty = true; // erneut versuchen beim nächsten Save
+            console.error('⚠️ Fassungen konnten nicht in IndexedDB gespeichert werden!');
+          }
+        });
+      }
 
       // Zeitstempel für Crash Recovery
       try { localStorage.setItem(KEYS.lastSaved, new Date().toISOString()); } catch(e) {}
@@ -3618,7 +3798,33 @@ was morgen kommt – wer ist dabei?</p>
     // ============================================
     // ZIP EXPORT
     // ============================================
-    function exportAsZip() {
+    function _safeFilename(name) {
+      return String(name || 'datei').replace(/[^a-zA-Z0-9äöüÄÖÜéèêàáâ._\s-]/g, '').replace(/\s+/g, '_').substring(0, 120);
+    }
+
+    function _extFromMime(mime) {
+      var map = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'image/svg+xml': '.svg' };
+      return map[mime] || '';
+    }
+
+    // Alle Bild-IDs sammeln, die das aktuelle Projekt in IndexedDB referenziert
+    function collectProjectImageIds() {
+      var ids = new Set();
+      var tb = state.projektMeta && state.projektMeta.titelbild;
+      if (tb && tb.startsWith('idb:')) ids.add(tb.substring(4));
+      (state.rechercheMaterial || []).forEach(function(r) {
+        if (r.bildData && typeof r.bildData === 'string' && r.bildData.startsWith('idb:')) ids.add(r.bildData.substring(4));
+      });
+      (state.kostueme || []).forEach(function(k) {
+        (k.kostuemBilder || []).forEach(function(id) { ids.add(id); });
+        (k.maskeBilder || []).forEach(function(id) { ids.add(id); });
+      });
+      (state.buehne || []).forEach(function(b) { (b.bilder || []).forEach(function(id) { ids.add(id); }); });
+      (state.requisiten || []).forEach(function(r) { (r.bilder || []).forEach(function(id) { ids.add(id); }); });
+      return Array.from(ids);
+    }
+
+    async function exportAsZip() {
       if (typeof JSZip === 'undefined') { alert('JSZip nicht geladen. Bitte Seite neu laden.'); return; }
       var zip = new JSZip();
       var projectName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '').replace(/\s+/g, '_');
@@ -3642,6 +3848,40 @@ was morgen kommt – wer ist dabei?</p>
       var exchangeData = createNinaExchangeV4();
       zip.file(projectName + '.nina-exchange.json', JSON.stringify(exchangeData, null, 2));
 
+      // 4. Audio-/Video-Dateien aus IndexedDB (Voll-Backup!)
+      // Ohne diese Binärdaten wäre ein Backup auf einem anderen Gerät unvollständig.
+      var manifest = { version: 1, audio: [], images: [] };
+      var medienFolder = null;
+      for (const medium of (state.medien || [])) {
+        try {
+          const result = await loadAudioFromDB(medium.id);
+          if (result && result.data && result.data.data) {
+            if (!medienFolder) medienFolder = zip.folder('Medien');
+            const fname = _safeFilename(medium.id + '_' + (result.data.name || medium.filename || medium.name || 'medium'));
+            medienFolder.file(fname, result.data.data);
+            manifest.audio.push({ id: medium.id, file: 'Medien/' + fname, type: result.data.type || '', name: result.data.name || '' });
+          }
+        } catch (e) { console.warn('Backup: Medium übersprungen:', medium.name, e); }
+      }
+
+      // 5. Bilder aus IndexedDB (Titelbild, Kostüme, Bühne, Requisiten, Recherche)
+      var bilderFolder = null;
+      for (const imgId of collectProjectImageIds()) {
+        try {
+          const result = await loadImageFromDB(imgId);
+          if (result && result.data && result.data.data) {
+            if (!bilderFolder) bilderFolder = zip.folder('Bilder');
+            const fname = _safeFilename(imgId) + _extFromMime(result.data.type);
+            bilderFolder.file(fname, result.data.data);
+            manifest.images.push({ id: imgId, file: 'Bilder/' + fname, type: result.data.type || '', name: result.data.name || '' });
+          }
+        } catch (e) { console.warn('Backup: Bild übersprungen:', imgId, e); }
+      }
+
+      if (manifest.audio.length > 0 || manifest.images.length > 0) {
+        zip.file('medien-manifest.json', JSON.stringify(manifest, null, 2));
+      }
+
       // Generieren und herunterladen
       zip.generateAsync({ type: 'blob' }).then(function(content) {
         var url = URL.createObjectURL(content);
@@ -3653,6 +3893,59 @@ was morgen kommt – wer ist dabei?</p>
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       });
+    }
+
+    // ZIP-Backup importieren: Medien nach IndexedDB zurückschreiben, dann Projekt laden
+    async function importBackupZip(file) {
+      if (typeof JSZip === 'undefined') { alert('JSZip nicht geladen. Bitte Seite neu laden.'); return; }
+      const zip = await JSZip.loadAsync(file);
+
+      // Projekt-JSON finden (Root, nicht im Versionsverlauf)
+      let rebuEntry = null;
+      zip.forEach(function(path, entry) {
+        if (entry.dir) return;
+        if (path.indexOf('Versionsverlauf/') === 0) return;
+        if (/\.rebu\.json$/i.test(path) && !rebuEntry) rebuEntry = entry;
+      });
+      if (!rebuEntry) {
+        // Fallback: nina-exchange
+        zip.forEach(function(path, entry) {
+          if (!entry.dir && /\.nina-exchange\.json$/i.test(path) && !rebuEntry) rebuEntry = entry;
+        });
+      }
+      if (!rebuEntry) throw new Error('Im ZIP wurde keine Projektdatei (.rebu.json) gefunden.');
+
+      // Zuerst Medien/Bilder nach IndexedDB zurückschreiben,
+      // damit restoreAudioUrls sie nach dem Import findet
+      const manifestEntry = zip.file('medien-manifest.json');
+      let restored = 0;
+      if (manifestEntry) {
+        try {
+          const manifest = JSON.parse(await manifestEntry.async('string'));
+          for (const m of (manifest.audio || [])) {
+            const fe = zip.file(m.file);
+            if (!fe) continue;
+            const buf = await fe.async('arraybuffer');
+            const f = new File([buf], m.name || m.file.split('/').pop(), { type: m.type || 'application/octet-stream' });
+            await saveAudioToDB(m.id, f);
+            restored++;
+          }
+          for (const m of (manifest.images || [])) {
+            const fe = zip.file(m.file);
+            if (!fe) continue;
+            const buf = await fe.async('arraybuffer');
+            const f = new File([buf], m.name || m.file.split('/').pop(), { type: m.type || 'image/jpeg' });
+            await saveImageToDB(m.id, f);
+            restored++;
+          }
+          if (restored > 0) console.log('✅ ' + restored + ' Mediendateien aus Backup wiederhergestellt');
+        } catch (e) {
+          console.warn('Medien-Manifest konnte nicht verarbeitet werden:', e);
+        }
+      }
+
+      const text = await rebuEntry.async('string');
+      await importFromDramera(JSON.parse(text));
     }
 
     let autosaveTimeout = null;
@@ -3827,6 +4120,7 @@ was morgen kommt – wer ist dabei?</p>
               state.medien = [];
               state.buehne = [];
               state.fassungen = [];
+              state._fassungenDirty = true;
               state.konzept = { treatment: [], fundament: { kern: '', logline: '', unaussprechliches: '', emotionalerBogen: '', konflikt: '' }, werte: [], motive: [] };
               state.beziehungen = [];
               state.rechercheMaterial = [];
@@ -4250,7 +4544,10 @@ was morgen kommt – wer ist dabei?</p>
         'ensemble', 'team', 'probeplan'
       ];
       projektKeyFns.forEach(fn => localStorage.removeItem(KEYS[fn](projektId)));
-      
+
+      // Fassungen des Projekts aus IndexedDB löschen
+      deleteFassungenFromDB(projektId).catch(() => {});
+
       // IndexedDB-Medien zum Projekt aufräumen
       try {
         if (mediaBD) {
@@ -4410,16 +4707,31 @@ was morgen kommt – wer ist dabei?</p>
             if (!state.referenzFassungId && state.fassungen.length > 0) {
               state.referenzFassungId = state.fassungen[state.fassungen.length - 1].id;
             }
+            state._fassungenDirty = true; // importierte Fassungen in IndexedDB schreiben
           }
           
-          // Recherche als Medien
-          if (d.recherche && d.recherche.length > 0) {
+          // Medien: bevorzugt das vollständige Feld (v3.1) verwenden.
+          // Nur mit allen Feldern (type/source/name) findet restoreAudioUrls
+          // die Audio-/Video-Binärdaten in IndexedDB wieder.
+          if (d.medien && d.medien.length > 0) {
+            state.medien = d.medien.map(m => {
+              const kopie = Object.assign({}, m);
+              kopie.id = kopie.id || genId();
+              delete kopie.localFileUrl; // wird via restoreAudioUrls neu erzeugt
+              if (!kopie.szenen) kopie.szenen = [];
+              return kopie;
+            });
+          } else if (d.recherche && d.recherche.length > 0) {
+            // Legacy-Backup: reduzierte Felder – restoreAudioUrls repariert
+            // die Verknüpfung automatisch, wenn die Daten noch in IndexedDB liegen.
             state.medien = d.recherche.map(r => ({
               id: r.id || genId(),
               typ: r.typ || 'text',
               titel: r.titel || 'Material',
+              name: r.titel || 'Material',
               inhalt: r.inhalt || r.text || '',
               url: r.url || '',
+              szenen: [],
             }));
           }
           
@@ -4434,8 +4746,13 @@ was morgen kommt – wer ist dabei?</p>
         }
         
         saveProjektDaten();
+
+        // Audio-/Video-Verknüpfungen wiederherstellen (inkl. Auto-Reparatur
+        // verwaister IndexedDB-Einträge aus alten Backups)
+        try { await restoreAudioUrls(); } catch (e) { console.warn('Medien-Wiederherstellung:', e); }
+
         render();
-        alert('✅ Import aus Backup erfolgreich!\n\n' + 
+        alert('✅ Import aus Backup erfolgreich!\n\n' +
               `${state.figuren.length} Figuren\n` +
               `${state.szenen.length} Szenen\n` +
               `${state.cues.length} Cues\n` +
@@ -4518,6 +4835,15 @@ was morgen kommt – wer ist dabei?</p>
           kostueme: JSON.parse(JSON.stringify(state.kostueme || [])),
           buehne: JSON.parse(JSON.stringify(state.buehne || [])),
           fassungen: JSON.parse(JSON.stringify(state.fassungen || [])),
+          // Medien VOLLSTÄNDIG exportieren (alle Felder, ohne flüchtige Blob-URL).
+          // Ohne type/source/name konnten Audios nach einem Backup-Import
+          // nicht mehr mit IndexedDB verknüpft werden (MP3-Verlust-Bug).
+          medien: state.medien.map(m => {
+            const kopie = Object.assign({}, m);
+            delete kopie.localFileUrl; // blob:-URLs sind nach Reload ungültig
+            return kopie;
+          }),
+          // Legacy-Feld für ältere Versionen/Dramera
           recherche: state.medien.map(m => ({
             id: m.id,
             typ: m.typ,
@@ -4555,13 +4881,28 @@ was morgen kommt – wer ist dabei?</p>
       };
 
       state.fassungen.push(fassung);
-      // Limit auf 20 Einträge
-      if (state.fassungen.length > 20) {
-        state.fassungen = state.fassungen.slice(-20);
+      // Getrennte Limits: Automatische Fassungen werden gekürzt,
+      // manuelle Fassungen/Backups bleiben erhalten (Warnung statt stillem Löschen).
+      const MAX_AUTO_FASSUNGEN = 20;
+      const MAX_MANUELLE_FASSUNGEN = 50;
+      const autoFassungen = state.fassungen.filter(f => f.source && f.source !== 'manuell');
+      if (autoFassungen.length > MAX_AUTO_FASSUNGEN) {
+        const zuLoeschen = new Set(autoFassungen.slice(0, autoFassungen.length - MAX_AUTO_FASSUNGEN).map(f => f.id));
+        state.fassungen = state.fassungen.filter(f => !zuLoeschen.has(f.id));
+        console.log('🧹 ' + zuLoeschen.size + ' alte automatische Fassungen entfernt');
+      }
+      const manuelle = state.fassungen.filter(f => !f.source || f.source === 'manuell');
+      if (manuelle.length > MAX_MANUELLE_FASSUNGEN) {
+        const aelteste = manuelle[0];
+        state.fassungen = state.fassungen.filter(f => f.id !== aelteste.id);
+        alert('Hinweis: Das Limit von ' + MAX_MANUELLE_FASSUNGEN + ' manuellen Fassungen ist erreicht.\n\n' +
+              'Die älteste Fassung «' + aelteste.name + '» wurde entfernt.\n' +
+              'Tipp: Exportiere wichtige Fassungen als Backup (💾 Sichern unter).');
       }
       state.projektMeta.fassung = fassung.name;
       state.projektMeta.fassungsDatum = fassung.datum;
       state.referenzFassungId = fassung.id; // Automatisch als Referenz für Änderungsverfolgung
+      state._fassungenDirty = true; // Fassungen in IndexedDB neu schreiben
       saveProjektDaten();
       render();
     }
@@ -4755,40 +5096,85 @@ was morgen kommt – wer ist dabei?</p>
     // ============================================
     // EDITOR FUNKTIONEN (v1.2: verbessert)
     // ============================================
-    function applyFormat(format) {
+    // ctxNode: optionaler, gesicherter Absatz-Knoten (Leader-Key: Chrome verwirft
+    // die Selektion bei Esc – dann kommt der Kontext von dort statt aus der Live-Selektion)
+    function applyFormat(format, ctxNode) {
       const editor = document.getElementById('text-editor');
       if (!editor) return;
-      
+
       const selection = window.getSelection();
-      if (!selection.rangeCount) return;
-      
-      const range = selection.getRangeAt(0);
-      const selectedText = range.toString().trim();
-      
+      let range = null;
+      if (selection.rangeCount > 0) {
+        const r = selection.getRangeAt(0);
+        if (editor.contains(r.commonAncestorContainer)) range = r;
+      }
+      const selectedText = (range && !range.collapsed) ? range.toString().trim() : '';
+
       // WICHTIG: Wenn keine Auswahl, formatiere die ganze Zeile/Absatz
       if (!selectedText) {
-        // Finde den aktuellen Absatz (p, div) wo der Cursor steht
-        let node = selection.anchorNode;
-        while (node && node !== editor) {
-          if (node.nodeType === 1 && (node.tagName === 'P' || node.tagName === 'DIV')) {
-            break;
-          }
+        // Ausgangspunkt: Live-Selektion oder gesicherter Kontext (Leader-Key)
+        let start = (range && editor.contains(range.startContainer)) ? range.startContainer : null;
+        if (!start && ctxNode && editor.contains(ctxNode)) start = ctxNode;
+        if (!start) {
+          showFormatToast('⚠ Kein Absatz gewählt – bitte in den Text klicken');
+          return;
+        }
+
+        // Bis zum obersten Element DIREKT unter dem Editor hochlaufen.
+        // (Die frühere Suche nach dem ersten P/DIV blieb bei verschachtelten
+        // Dialog-Strukturen am falschen Element hängen bzw. fand gar nichts –
+        // dann musste man von Hand erst «Standard» zuweisen.)
+        let node = start;
+        while (node && node.parentNode !== editor && node !== editor) {
           node = node.parentNode;
         }
-        
+        if (!node || node === editor) {
+          showFormatToast('⚠ Absatz nicht gefunden');
+          return;
+        }
+
+        // Nackter Text-/Inline-Knoten direkt im Editor (z.B. nach Einfügen):
+        // zuerst in einen sauberen Absatz normalisieren – automatisch statt von Hand.
+        if (node.nodeType !== 1 || (node.tagName !== 'P' && node.tagName !== 'DIV')) {
+          pushUndo();
+          const wrapP = document.createElement('p');
+          wrapP.className = 'format-standard';
+          node.parentNode.replaceChild(wrapP, node);
+          wrapP.appendChild(node);
+          node = wrapP;
+        }
+
         if (node && node !== editor && node.nodeType === 1) {
           // Undo speichern
           pushUndo();
-          
+
           // Text des Absatzes holen (alle Whitespace normalisieren)
           const text = node.textContent.replace(/\s+/g, ' ').trim();
-          if (!text) return;
-          
-          // Neues formatiertes Element erstellen
-          const vorlage = FORMATVORLAGEN[format];
+          if (!text) {
+            // Leerer Absatz: nur die Format-Klasse wechseln
+            const vorlageLeer = FORMATVORLAGEN[format];
+            node.className = (vorlageLeer && vorlageLeer.class) || (format === 'figurenname' ? 'format-figurenname' : 'format-standard');
+            saveCurrentText();
+            showFormatToast('Format: ' + (FORMAT_NAMEN[format] || format));
+            return;
+          }
+
+          // Neues formatiertes Element erstellen.
+          // BUGFIX: Für 'figurenname' existierte KEIN Eintrag in FORMATVORLAGEN –
+          // applyFormat('figurenname') (Esc+F) endete darum immer im TypeError.
+          const vorlage = FORMATVORLAGEN[format] || { class: format === 'figurenname' ? 'format-figurenname' : 'format-standard' };
           let newElement;
-          
+
           switch (format) {
+            case 'figurenname': {
+              // Absatztext wird zum Figurennamen einer neuen Dialog-Struktur
+              newElement = document.createElement('div');
+              newElement.className = 'format-dialog';
+              const fmName = text.replace(/:\s*$/, '').toUpperCase();
+              newElement.innerHTML = `<span class="figur-name">${escapeHtml(fmName)}:</span><span class="dialog-text"></span>`;
+              break;
+            }
+
             case 'dialog':
               newElement = document.createElement('div');
               newElement.className = vorlage.class;
@@ -4853,51 +5239,55 @@ was morgen kommt – wer ist dabei?</p>
       // Mit Auswahl: Original-Verhalten
       // Undo speichern
       pushUndo();
-      
-      const vorlage = FORMATVORLAGEN[format];
+
+      const vorlage = FORMATVORLAGEN[format] || { class: format === 'figurenname' ? 'format-figurenname' : 'format-standard' };
       let newHtml = '';
-      
+
       switch (format) {
+        case 'figurenname':
+          newHtml = `<div class="format-dialog"><span class="figur-name">${escapeHtml(selectedText.replace(/:\s*$/, '').toUpperCase())}:</span><span class="dialog-text"></span></div>`;
+          break;
+
         case 'dialog':
           // v1.4: Dialog-Format - erkennt NAME: Text
           const selMatch = selectedText.replace(/\s+/g, ' ').match(/^([A-ZÄÖÜa-zäöü][A-ZÄÖÜa-zäöüß\s\d\.]*?):\s*(.*)$/);
           if (selMatch) {
             const fName = selMatch[1].trim().toUpperCase();
-            newHtml = `<div class="${vorlage.class}"><span class="figur-name">${fName}:</span><span class="dialog-text">${selMatch[2]}</span></div>`;
+            newHtml = `<div class="${vorlage.class}"><span class="figur-name">${escapeHtml(fName)}:</span><span class="dialog-text">${escapeHtml(selMatch[2])}</span></div>`;
           } else {
-            newHtml = `<div class="${vorlage.class}"><span class="figur-name">FIGUR:</span><span class="dialog-text">${selectedText}</span></div>`;
+            newHtml = `<div class="${vorlage.class}"><span class="figur-name">FIGUR:</span><span class="dialog-text">${escapeHtml(selectedText)}</span></div>`;
           }
           break;
-          
+
         case 'regieanweisung':
           let text = selectedText;
           if (!text.startsWith('(')) text = '(' + text;
           if (!text.endsWith(')')) text = text + ')';
-          newHtml = `<p class="${vorlage.class}">${text}</p>`;
+          newHtml = `<p class="${vorlage.class}">${escapeHtml(text)}</p>`;
           break;
-          
+
         case 'szeneTitel':
-          newHtml = `<p class="${vorlage.class}">${selectedText}</p>`;
+          newHtml = `<p class="${vorlage.class}">${escapeHtml(selectedText)}</p>`;
           // Neue Szene erstellen wenn gewünscht
           setTimeout(() => createSceneFromTitle(selectedText, null), 100);
           break;
-        
+
         case 'aktTitel':
-          newHtml = `<p class="${vorlage.class}">${selectedText}</p>`;
+          newHtml = `<p class="${vorlage.class}">${escapeHtml(selectedText)}</p>`;
           // Neuen Akt erstellen
           setTimeout(() => createActFromTitle(selectedText, null), 100);
           break;
-          
+
         case 'lied':
-          newHtml = `<p class="${vorlage.class}">${selectedText}</p>`;
+          newHtml = `<p class="${vorlage.class}">${escapeHtml(selectedText)}</p>`;
           break;
-          
+
         case 'vers':
-          newHtml = `<p class="${vorlage.class}">${selectedText}</p>`;
+          newHtml = `<p class="${vorlage.class}">${escapeHtml(selectedText)}</p>`;
           break;
-          
+
         default:
-          newHtml = `<p class="${vorlage.class}">${selectedText}</p>`;
+          newHtml = `<p class="${vorlage.class}">${escapeHtml(selectedText)}</p>`;
       }
       
       range.deleteContents();
@@ -5202,10 +5592,16 @@ was morgen kommt – wer ist dabei?</p>
         clearSearchHighlights();
         return;
       }
-      
+      buildSearchBar();
+      setTimeout(() => document.getElementById('search-input')?.focus(), 50);
+    }
+
+    // Suchleiste aufbauen (auch nach einem render()-Neuaufbau wiederverwendbar)
+    function buildSearchBar(prefillQuery, prefillReplace) {
       const toolbar = document.querySelector('.toolbar');
-      if (!toolbar) return;
-      
+      if (!toolbar) return false;
+      const existing = document.getElementById('search-replace-bar');
+      if (existing) existing.remove();
       const bar = document.createElement('div');
       bar.id = 'search-replace-bar';
       bar.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 12px; background:#f8fafc; border-top:1px solid #e2e8f0; flex-wrap:wrap;';
@@ -5224,13 +5620,49 @@ was morgen kommt – wer ist dabei?</p>
         <button onclick="toggleSearchReplace()" style="padding:3px 8px; font-size:12px; border:none; background:none; cursor:pointer; color:#6b7280;" title="Schliessen">✕</button>
       `;
       toolbar.after(bar);
-      
-      setTimeout(() => document.getElementById('search-input')?.focus(), 50);
+      if (prefillQuery) {
+        const si = document.getElementById('search-input');
+        if (si) si.value = prefillQuery;
+      }
+      if (prefillReplace) {
+        const ri = document.getElementById('replace-input');
+        if (ri) ri.value = prefillReplace;
+      }
+      searchReplaceVisible = true;
+      return true;
     }
-    
+
     let searchMatches = [];
     let currentMatchIndex = -1;
-    
+    // Dokumentweite Suche: Treffer-Zählung über ALLE Szenen (nicht nur die aktive)
+    let globalSearch = { query: '', szenen: [], totalCount: 0 };
+    let _preserveSearch = null; // Kontext beim Szenenwechsel während der Suche
+
+    // Wurzel-Elemente für die DOM-Suche: Szenen-Editor ODER alle Fliesstext-Editoren
+    function _searchRoots() {
+      const single = document.getElementById('text-editor');
+      if (single) return [single];
+      return Array.from(document.querySelectorAll('.fliesstext-editor[data-szene-id]'));
+    }
+
+    // Treffer pro Szene im DATENMODELL zählen (für die dokumentweite Anzeige/Navigation)
+    function computeGlobalSearch(query) {
+      const queryLower = query.toLowerCase();
+      const list = [];
+      let total = 0;
+      (state.szenen || []).forEach(s => {
+        const html = state.textbuch[s.id] || '';
+        if (!html) return;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        const text = (tmp.textContent || '').toLowerCase();
+        let c = 0, pos = 0;
+        while ((pos = text.indexOf(queryLower, pos)) !== -1) { c++; pos += Math.max(1, queryLower.length); }
+        if (c > 0) { list.push({ szeneId: s.id, count: c }); total += c; }
+      });
+      globalSearch = { query, szenen: list, totalCount: total };
+    }
+
     function doSearch() {
       clearSearchHighlights();
       const query = document.getElementById('search-input')?.value;
@@ -5239,58 +5671,79 @@ was morgen kommt – wer ist dabei?</p>
         if (countEl) countEl.textContent = '';
         searchMatches = [];
         currentMatchIndex = -1;
+        globalSearch = { query: '', szenen: [], totalCount: 0 };
         return;
       }
-      
-      const editor = document.getElementById('text-editor');
-      if (!editor) return;
-      
-      // TreeWalker für Text-Nodes
-      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null, false);
-      const textNodes = [];
-      while (walker.nextNode()) textNodes.push(walker.currentNode);
-      
+
+      // Aktuellen Editor-Stand ins Datenmodell übernehmen, dann DOKUMENTWEIT zählen
+      saveCurrentText();
+      computeGlobalSearch(query);
+
+      const roots = _searchRoots();
       searchMatches = [];
       const queryLower = query.toLowerCase();
-      
-      textNodes.forEach(node => {
-        const text = node.textContent.toLowerCase();
-        let pos = 0;
-        while ((pos = text.indexOf(queryLower, pos)) !== -1) {
-          searchMatches.push({ node, start: pos, length: query.length });
-          pos += query.length;
+
+      roots.forEach(root => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+        const textNodes = [];
+        while (walker.nextNode()) textNodes.push(walker.currentNode);
+        const localMatches = [];
+        textNodes.forEach(node => {
+          const text = node.textContent.toLowerCase();
+          let pos = 0;
+          while ((pos = text.indexOf(queryLower, pos)) !== -1) {
+            localMatches.push({ node, start: pos, length: query.length });
+            pos += query.length;
+          }
+        });
+        // Rückwärts highlighten, damit Positionen stabil bleiben
+        for (let i = localMatches.length - 1; i >= 0; i--) {
+          const m = localMatches[i];
+          try {
+            const range = document.createRange();
+            range.setStart(m.node, m.start);
+            range.setEnd(m.node, m.start + m.length);
+            const mark = document.createElement('mark');
+            mark.className = 'search-highlight';
+            mark.style.cssText = 'background:#fde68a; padding:0 1px; border-radius:2px;';
+            range.surroundContents(mark);
+          } catch(e) { /* Skip if range crosses elements */ }
         }
       });
-      
-      if (countEl) countEl.textContent = searchMatches.length > 0 ? `${searchMatches.length} Treffer` : 'Keine Treffer';
-      
-      // Alle Treffer highlighten
-      // Rückwärts durch die Matches, damit Positionen stabil bleiben
-      for (let i = searchMatches.length - 1; i >= 0; i--) {
-        const m = searchMatches[i];
-        try {
-          const range = document.createRange();
-          range.setStart(m.node, m.start);
-          range.setEnd(m.node, m.start + m.length);
-          const mark = document.createElement('mark');
-          mark.className = 'search-highlight';
-          mark.style.cssText = 'background:#fde68a; padding:0 1px; border-radius:2px;';
-          range.surroundContents(mark);
-        } catch(e) { /* Skip if range crosses elements */ }
-      }
-      
-      // Aktualisiere Matches-Liste nach Highlighting
-      const marks = editor.querySelectorAll('mark.search-highlight');
-      searchMatches = Array.from(marks);
+
+      // Matches-Liste = alle Marks (über alle Roots, in Dokumentreihenfolge)
+      searchMatches = [];
+      roots.forEach(root => {
+        searchMatches.push(...root.querySelectorAll('mark.search-highlight'));
+      });
       currentMatchIndex = searchMatches.length > 0 ? 0 : -1;
-      
+
+      _updateSearchCount();
       if (currentMatchIndex >= 0) highlightCurrentMatch();
     }
-    
+
+    function _updateSearchCount() {
+      const countEl = document.getElementById('search-count');
+      if (!countEl) return;
+      const gesamt = globalSearch.totalCount;
+      const szenenMitTreffern = globalSearch.szenen.length;
+      if (gesamt === 0) { countEl.textContent = 'Keine Treffer'; return; }
+      if (document.getElementById('text-editor') && szenenMitTreffern > 1) {
+        // Szenen-Modus: Gesamtzahl über alle Szenen anzeigen
+        const lokal = searchMatches.length;
+        const pos = currentMatchIndex >= 0 ? (currentMatchIndex + 1) + '/' + lokal + ' hier · ' : '';
+        countEl.textContent = pos + gesamt + ' Treffer in ' + szenenMitTreffern + ' Szenen';
+      } else {
+        countEl.textContent = searchMatches.length > 0
+          ? `${currentMatchIndex >= 0 ? (currentMatchIndex + 1) + ' / ' : ''}${searchMatches.length} Treffer`
+          : gesamt + ' Treffer (in anderen Szenen – ▼ springt hin)';
+      }
+    }
+
     function highlightCurrentMatch() {
       // Alle auf Standard zurück
       searchMatches.forEach(m => {
-        if (m.style) m.style.background = '#fde68a';
+        if (m.style) { m.style.background = '#fde68a'; m.style.color = ''; }
       });
       // Aktuellen hervorheben
       if (currentMatchIndex >= 0 && currentMatchIndex < searchMatches.length) {
@@ -5298,65 +5751,186 @@ was morgen kommt – wer ist dabei?</p>
         current.style.background = '#f97316';
         current.style.color = 'white';
         current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        
-        const countEl = document.getElementById('search-count');
-        if (countEl) countEl.textContent = `${currentMatchIndex + 1} / ${searchMatches.length}`;
+        _updateSearchCount();
       }
     }
-    
+
+    // Nächste/vorherige Szene mit Treffern finden (Dokumentreihenfolge, mit Umlauf)
+    function _findSearchScene(dir) {
+      const list = globalSearch.szenen;
+      if (list.length === 0) return null;
+      const idx = list.findIndex(e => e.szeneId === state.aktiveSzene);
+      if (idx === -1) {
+        // Aktive Szene hat keine Treffer → erste/letzte Szene mit Treffern
+        return dir > 0 ? list[0].szeneId : list[list.length - 1].szeneId;
+      }
+      if (list.length === 1) return null; // nur die aktive Szene hat Treffer
+      const nextIdx = (idx + dir + list.length) % list.length;
+      return list[nextIdx].szeneId;
+    }
+
+    // Während der Suche in eine andere Szene springen: Suchleiste und Query überleben
+    function _gotoSearchScene(szeneId, targetLocalIndex) {
+      const query = document.getElementById('search-input')?.value || globalSearch.query;
+      const replaceVal = document.getElementById('replace-input')?.value || '';
+      _preserveSearch = { query, replaceVal };
+      selectSzene(szeneId);
+      // Nach dem Re-Render: Leiste wiederherstellen und in der neuen Szene suchen
+      setTimeout(() => {
+        buildSearchBar(query, replaceVal);
+        doSearch();
+        if (searchMatches.length > 0) {
+          currentMatchIndex = targetLocalIndex >= 0
+            ? Math.min(targetLocalIndex, searchMatches.length - 1)
+            : searchMatches.length - 1;
+          highlightCurrentMatch();
+        }
+        _preserveSearch = null;
+      }, 60);
+    }
+
     function doSearchNext() {
-      if (searchMatches.length === 0) return;
-      currentMatchIndex = (currentMatchIndex + 1) % searchMatches.length;
-      highlightCurrentMatch();
+      if (searchMatches.length > 0 && currentMatchIndex < searchMatches.length - 1) {
+        currentMatchIndex++;
+        highlightCurrentMatch();
+        return;
+      }
+      // Ende der aktiven Szene erreicht → nächste Szene mit Treffern (nur Szenen-Modus)
+      if (document.getElementById('text-editor')) {
+        const next = _findSearchScene(1);
+        if (next) { _gotoSearchScene(next, 0); return; }
+      }
+      // Umlauf innerhalb der Szene
+      if (searchMatches.length > 0) {
+        currentMatchIndex = 0;
+        highlightCurrentMatch();
+      }
     }
-    
+
     function doSearchPrev() {
-      if (searchMatches.length === 0) return;
-      currentMatchIndex = (currentMatchIndex - 1 + searchMatches.length) % searchMatches.length;
-      highlightCurrentMatch();
+      if (searchMatches.length > 0 && currentMatchIndex > 0) {
+        currentMatchIndex--;
+        highlightCurrentMatch();
+        return;
+      }
+      if (document.getElementById('text-editor')) {
+        const prev = _findSearchScene(-1);
+        if (prev) { _gotoSearchScene(prev, -1); return; }
+      }
+      if (searchMatches.length > 0) {
+        currentMatchIndex = searchMatches.length - 1;
+        highlightCurrentMatch();
+      }
     }
-    
+
     function doReplace() {
       if (currentMatchIndex < 0 || currentMatchIndex >= searchMatches.length) return;
       const replaceWith = document.getElementById('replace-input')?.value || '';
-      
+
       pushUndoImmediate();
-      
+
       const mark = searchMatches[currentMatchIndex];
       mark.replaceWith(document.createTextNode(replaceWith));
-      
+
       saveCurrentText();
       doSearch(); // Re-search
     }
-    
+
+    // Suchbegriff in einem HTML-String ersetzen – über DOM-Parsing,
+    // damit NIE in Tags/Attributen (z.B. Klassennamen) ersetzt wird
+    function _replaceInHtml(html, query, replaceWith) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      const queryLower = query.toLowerCase();
+      let count = 0;
+      const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT, null, false);
+      const textNodes = [];
+      while (walker.nextNode()) textNodes.push(walker.currentNode);
+      textNodes.forEach(node => {
+        const text = node.textContent;
+        const textLower = text.toLowerCase();
+        if (textLower.indexOf(queryLower) === -1) return;
+        let result = '';
+        let pos = 0, found;
+        while ((found = textLower.indexOf(queryLower, pos)) !== -1) {
+          result += text.substring(pos, found) + replaceWith;
+          pos = found + query.length;
+          count++;
+        }
+        result += text.substring(pos);
+        node.textContent = result;
+      });
+      return { html: tmp.innerHTML, count };
+    }
+
     function doReplaceAll() {
-      if (searchMatches.length === 0) return;
+      const query = document.getElementById('search-input')?.value;
+      if (!query || query.length < 2) return;
       const replaceWith = document.getElementById('replace-input')?.value || '';
-      
+
+      // Treffer ausserhalb der aktuell sichtbaren Szene(n)?
+      saveCurrentText();
+      computeGlobalSearch(query);
+      const sichtbareIds = new Set();
+      if (document.getElementById('text-editor')) {
+        if (state.aktiveSzene) sichtbareIds.add(state.aktiveSzene);
+      } else {
+        document.querySelectorAll('.fliesstext-editor[data-szene-id]').forEach(ed => sichtbareIds.add(ed.dataset.szeneId));
+      }
+      const andereSzenen = globalSearch.szenen.filter(e => !sichtbareIds.has(e.szeneId));
+      const andereCount = andereSzenen.reduce((sum, e) => sum + e.count, 0);
+
+      if (andereCount > 0) {
+        if (!confirm('«' + query + '» wird im GANZEN Dokument ersetzt:\n\n' +
+                     '• ' + andereCount + ' Treffer in ' + andereSzenen.length + ' anderen Szenen\n' +
+                     '• ' + searchMatches.length + ' Treffer in der aktuellen Ansicht\n\n' +
+                     'Hinweis: Ersetzungen in anderen Szenen können nicht per Undo rückgängig gemacht werden.\n\nFortfahren?')) {
+          return;
+        }
+      } else if (searchMatches.length === 0) {
+        return;
+      }
+
       pushUndoImmediate();
-      
-      // Rückwärts ersetzen
+
+      // 1) Sichtbare Treffer im DOM ersetzen
+      let ersetztLokal = 0;
       for (let i = searchMatches.length - 1; i >= 0; i--) {
         searchMatches[i].replaceWith(document.createTextNode(replaceWith));
+        ersetztLokal++;
       }
-      
       saveCurrentText();
-      
+
+      // 2) Alle übrigen Szenen im DATENMODELL ersetzen (DOM-Parsing, kein rohes String-Replace)
+      let ersetztAndere = 0;
+      andereSzenen.forEach(e => {
+        const html = state.textbuch[e.szeneId];
+        if (!html) return;
+        const res = _replaceInHtml(html, query, replaceWith);
+        if (res.count > 0) {
+          state.textbuch[e.szeneId] = res.html;
+          ersetztAndere += res.count;
+        }
+      });
+      if (ersetztAndere > 0) saveProjektDaten();
+
       const countEl = document.getElementById('search-count');
-      if (countEl) countEl.textContent = 'Alle ersetzt';
+      if (countEl) countEl.textContent = (ersetztLokal + ersetztAndere) + ' ersetzt' +
+        (ersetztAndere > 0 ? ' (' + ersetztAndere + ' in anderen Szenen)' : '');
       searchMatches = [];
       currentMatchIndex = -1;
+      globalSearch = { query: '', szenen: [], totalCount: 0 };
     }
-    
+
     function clearSearchHighlights() {
-      const editor = document.getElementById('text-editor');
-      if (!editor) return;
-      const marks = editor.querySelectorAll('mark.search-highlight');
-      marks.forEach(mark => {
-        mark.replaceWith(document.createTextNode(mark.textContent));
+      _searchRoots().forEach(root => {
+        const marks = root.querySelectorAll('mark.search-highlight');
+        marks.forEach(mark => {
+          mark.replaceWith(document.createTextNode(mark.textContent));
+        });
+        // Adjazente Text-Nodes zusammenführen
+        root.normalize();
       });
-      // Adjazente Text-Nodes zusammenführen
-      editor.normalize();
     }
     
     // v1.2: Text als gestrichen markieren
@@ -5589,12 +6163,17 @@ was morgen kommt – wer ist dabei?</p>
         // Standard-Absatztrenner
         try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch(e) {}
         
+        // Debounced: Serialisierung (innerHTML + Regex) nicht bei jedem Tastendruck
+        let _flowSaveTimer = null;
         editor.addEventListener('input', () => {
-          // Nur diese eine Szene im State aktualisieren
-          let content = stripCueMarkers(editor.innerHTML);
-          content = stripInlineRegie(content);
-          state.textbuch[szeneId] = content;
-          debouncedSaveProjektDaten();
+          if (_flowSaveTimer) clearTimeout(_flowSaveTimer);
+          _flowSaveTimer = setTimeout(() => {
+            _flowSaveTimer = null;
+            let content = stripCueMarkers(editor.innerHTML);
+            content = stripInlineRegie(content);
+            state.textbuch[szeneId] = content;
+            debouncedSaveProjektDaten();
+          }, 400);
         });
         
         editor.addEventListener('focus', () => {
@@ -5689,29 +6268,43 @@ was morgen kommt – wer ist dabei?</p>
     function applyInlineRegieToEditor() {
       const editor = document.getElementById('text-editor');
       if (!editor) return;
-      
-      // Nur anwenden wenn Klammertexte in Dialogen vorhanden
-      const html = editor.innerHTML;
-      if (!html.includes('format-dialog') && !html.includes('dialog-text')) return;
-      
-      // Prüfen ob es unformatierte Klammertexte gibt
-      const stripped = stripInlineRegie(html);
-      const wrapped = wrapInlineRegie(stripped);
-      if (wrapped === html) return; // Nichts zu tun
-      
-      // Cursor-Position sichern
+
+      // Nur anwenden wenn Dialog-Blöcke vorhanden
+      if (!editor.querySelector('.format-dialog, .dialog-text')) return;
+
+      // PERFORMANCE: Nur die betroffenen Dialog-Blöcke gezielt umschreiben.
+      // Der frühere Voll-Ersatz von editor.innerHTML verursachte bei jeder
+      // Tipp-Pause Reflow über die ganze Szene und Cursor-Sprünge.
       const sel = window.getSelection();
-      let savedOffset = null;
-      if (sel.rangeCount > 0 && editor.contains(sel.anchorNode)) {
-        savedOffset = getTextOffset(editor, sel.anchorNode, sel.anchorOffset);
-      }
-      
-      editor.innerHTML = wrapped;
-      
-      // Cursor wiederherstellen
-      if (savedOffset !== null) {
-        restoreTextOffset(editor, savedOffset);
-      }
+      const kandidaten = editor.querySelectorAll('.format-dialog, .dialog-text');
+      const bearbeitet = new Set();
+
+      kandidaten.forEach(el => {
+        const block = (el.closest && el.closest('.format-dialog')) || el;
+        if (bearbeitet.has(block) || !block.parentNode) return;
+        bearbeitet.add(block);
+
+        const oldHtml = block.outerHTML;
+        const stripped = stripInlineRegie(oldHtml);
+        const wrapped = wrapInlineRegie(stripped);
+        if (wrapped === oldHtml) return; // Nichts zu tun in diesem Block
+
+        // Cursor nur retten, wenn er in DIESEM Block steht
+        let savedOffset = null;
+        if (sel.rangeCount > 0 && block.contains(sel.anchorNode)) {
+          savedOffset = getTextOffset(block, sel.anchorNode, sel.anchorOffset);
+        }
+
+        const temp = document.createElement('div');
+        temp.innerHTML = wrapped;
+        const neu = temp.firstElementChild;
+        if (!neu) return;
+        block.replaceWith(neu);
+
+        if (savedOffset !== null) {
+          restoreTextOffset(neu, savedOffset);
+        }
+      });
     }
     
     function scheduleInlineRegie() {
@@ -5796,7 +6389,20 @@ was morgen kommt – wer ist dabei?</p>
       return enrichedText;
     }
 
+    // Debounced-Variante für den input-Handler: verhindert, dass bei jedem
+    // Tastendruck der komplette Editor serialisiert wird (Tipp-Latenz!)
+    let _saveCurrentTextTimer = null;
+    function debouncedSaveCurrentText() {
+      if (_saveCurrentTextTimer) clearTimeout(_saveCurrentTextTimer);
+      _saveCurrentTextTimer = setTimeout(() => {
+        _saveCurrentTextTimer = null;
+        saveCurrentText();
+      }, 400);
+    }
+
     function saveCurrentText(immediate = false) {
+      // Anstehenden debounced Save verwerfen – wir speichern jetzt ohnehin frisch
+      if (_saveCurrentTextTimer) { clearTimeout(_saveCurrentTextTimer); _saveCurrentTextTimer = null; }
       // Fliesstext-Modus: Alle Editoren speichern
       if (state.textbuchModus === 'fliesstext') {
         const editors = document.querySelectorAll('.fliesstext-editor[data-szene-id]');
@@ -6094,6 +6700,10 @@ was morgen kommt – wer ist dabei?</p>
     // v2.0: Handler für Cloud-Speichern Button
     function handleCloudSave() {
       closeProjektMenu();
+      if (!CLOUD_ENABLED) {
+        alert('Die Cloud-Funktion ist in dieser Version deaktiviert.\n\nNutze «Sichern» oder «Komplett-Backup (ZIP)», um dein Projekt zu sichern.');
+        return;
+      }
       const istCloudProjekt = !!(currentCloudProjectId && isCloudMode);
       if (!cloudUser) {
         state.showCloudModal = true;
@@ -6104,10 +6714,11 @@ was morgen kommt – wer ist dabei?</p>
         uploadToCloud();
       }
     }
-    
+
     // v2.0: Handler für Cloud-Reload Button
     function handleCloudReload() {
       closeProjektMenu();
+      if (!CLOUD_ENABLED) return;
       const istCloudProjekt = !!(currentCloudProjectId && isCloudMode);
       if (istCloudProjekt) {
         forceCloudSync();
@@ -6426,8 +7037,9 @@ WICHTIGE REGELN:
             ${state.kiMessages.map((msg, i) => `
               <div class="ki-message ${msg.role}">
                 ${msg.content.split('\n').map(line => {
-                  // Markdown-ähnliche Formatierung
-                  const formatted = line.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                  // XSS-Schutz: Inhalt IMMER escapen (KI-Antworten können HTML-artigen
+                  // Text enthalten), erst danach die Markdown-Fett-Formatierung anwenden
+                  const formatted = escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
                   return `<p>${formatted}</p>`;
                 }).join('')}
               </div>
@@ -6689,7 +7301,7 @@ WICHTIGE REGELN:
         ${state.showLightbox ? renderLightbox() : ''}
         ${showCueExportDialog ? renderCueExportDialog() : ''}
         ${state.showProjektModal ? renderProjektModal() : ''}
-        ${state.showCloudModal ? renderCloudModal() : ''}
+        ${(state.showCloudModal && CLOUD_ENABLED) ? renderCloudModal() : ''}
         ${state.showProjektListeModal ? renderProjektListeModal() : ''}
         ${renderKiPanel()}
       `;
@@ -6716,9 +7328,12 @@ WICHTIGE REGELN:
         initUndoForScene();
         
         editor.addEventListener('input', () => {
-          saveCurrentText();
+          // PERFORMANCE: saveCurrentText serialisiert den GANZEN Editor (innerHTML
+          // + 2 Regex-Durchläufe). Das darf nicht bei jedem Tastendruck laufen –
+          // sonst wird das Tippen in langen Szenen zäh. Darum debounced.
+          debouncedSaveCurrentText();
           debouncedPushUndo(); // Undo-Snapshot nach Tipp-Pause
-          scheduleInlineRegie(); // Inline-Regie live formatieren
+          scheduleInlineRegie(); // Inline-Regie nach Tipp-Pause formatieren
         });
         editor.addEventListener('blur', () => { saveCurrentText(true); applyInlineRegieToEditor(); });
         
@@ -7621,7 +8236,7 @@ WICHTIGE REGELN:
             
             <!-- Format-Shortcuts (ganz unten) - nur Anzeige, kein Klick -->
             <div class="detail-section border-t pt-3 mt-3">
-              <div class="detail-label text-gray-400">FORMATE (CTRL+SHIFT+...)</div>
+              <div class="detail-label text-gray-400">FORMATE (Esc, dann Taste)</div>
               <div id="format-indicator" class="text-xs space-y-0.5 font-mono">
                 <div class="format-item px-1.5 py-0.5 rounded" data-format="dialog">
                   <span class="font-bold text-blue-600">D</span> Dialog
@@ -8732,7 +9347,9 @@ WICHTIGE REGELN:
                       class="w-full text-sm p-2 rounded border border-${c}-200 bg-white mb-2" placeholder="https://...">
                   ` : ''}
                   ${item.typ === 'bild' ? `
-                    ${item.bildData ? `<img src="${item.bildData}" class="max-h-40 rounded mb-2 cursor-pointer" onclick="openLightboxSingle('${item.bildData}')">` : ''}
+                    ${item.bildData ? (item.bildData.startsWith('idb:')
+                      ? `<img id="recherche-img-${item.id}" class="max-h-40 rounded mb-2 cursor-pointer" onclick="openRechercheLightbox('${item.id}')" alt="Recherche-Bild">${showTitelbildAsync('recherche-img-' + item.id, item.bildData) || ''}`
+                      : `<img src="${item.bildData}" class="max-h-40 rounded mb-2 cursor-pointer" onclick="openRechercheLightbox('${item.id}')">`) : ''}
                     <input type="file" accept="image/*" onchange="uploadRechercheBild('${item.id}', this)" class="text-xs mb-2">
                   ` : ''}
                   <textarea rows="2" 
@@ -8846,6 +9463,10 @@ WICHTIGE REGELN:
     function deleteRechercheMaterial(id) {
       if (!confirm('Material löschen?')) return;
       pushUndo();
+      const item = state.rechercheMaterial.find(r => r.id === id);
+      if (item && item.bildData && item.bildData.startsWith('idb:')) {
+        deleteImageFromDB(item.bildData.substring(4)).catch(() => {});
+      }
       state.rechercheMaterial = state.rechercheMaterial.filter(r => r.id !== id);
       saveProjektDaten();
       render();
@@ -8866,22 +9487,63 @@ WICHTIGE REGELN:
       render();
     }
     
-    function uploadRechercheBild(materialId, input) {
+    async function uploadRechercheBild(materialId, input) {
       const file = input.files[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        updateRechercheMaterial(materialId, 'bildData', e.target.result);
+      // Bild in IndexedDB speichern (NICHT als Base64 in localStorage – Quota!)
+      const imgId = 'recherche_' + materialId;
+      try {
+        await saveImageToDB(imgId, file);
+        updateRechercheMaterial(materialId, 'bildData', 'idb:' + imgId);
         render();
-      };
-      reader.readAsDataURL(file);
+      } catch (e) {
+        console.error('Recherche-Bild konnte nicht gespeichert werden:', e);
+        alert('Bild konnte nicht gespeichert werden: ' + (e.message || e));
+      }
     }
-    
+
+    // Migration: Alte Base64-Recherche-Bilder aus localStorage nach IndexedDB verschieben
+    async function migrateRechercheBilder() {
+      const items = (state.rechercheMaterial || []).filter(r =>
+        r.bildData && typeof r.bildData === 'string' && r.bildData.startsWith('data:image/'));
+      if (items.length === 0) return;
+      let migriert = 0;
+      for (const item of items) {
+        try {
+          const imgId = 'recherche_' + item.id;
+          const resp = await fetch(item.bildData);
+          const blob = await resp.blob();
+          const file = new File([blob], 'recherche.jpg', { type: blob.type || 'image/jpeg' });
+          await saveImageToDB(imgId, file);
+          item.bildData = 'idb:' + imgId;
+          migriert++;
+        } catch (e) {
+          console.warn('Recherche-Bild-Migration fehlgeschlagen:', e);
+        }
+      }
+      if (migriert > 0) {
+        console.log('✅ Migration: ' + migriert + ' Recherche-Bilder nach IndexedDB verschoben');
+        saveProjektDaten();
+        render();
+      }
+    }
+
     function openLightboxSingle(src) {
       state.lightboxImages = [src];
       state.lightboxIndex = 0;
       state.showLightbox = true;
       render();
+    }
+
+    // Recherche-Bild (idb:-Referenz) auflösen und Lightbox öffnen
+    function openRechercheLightbox(materialId) {
+      const item = (state.rechercheMaterial || []).find(r => r.id === materialId);
+      if (!item || !item.bildData) return;
+      if (item.bildData.startsWith('idb:')) {
+        resolveTitelbild(item.bildData).then(url => { if (url) openLightboxSingle(url); });
+      } else {
+        openLightboxSingle(item.bildData);
+      }
     }
     
     // === MUSIKKONZEPT CRUD ===
@@ -9390,12 +10052,15 @@ WICHTIGE REGELN:
     async function updateStorageInfo() {
       const infoEl = document.getElementById('storage-info');
       if (!infoEl) return;
-      
+
       try {
         const info = await getAudioStorageInfo();
+        // Auch die localStorage-Auslastung anzeigen – dort sitzt das Quota-Limit
+        const lsMB = parseFloat(getStorageUsageMB());
+        const lsWarnung = lsMB > 4 ? ' <span style="color:#dc2626;font-weight:600;">⚠ knapp!</span>' : '';
         infoEl.innerHTML = `
-          <div>💾 ${info.count} Audio${info.count !== 1 ? 's' : ''} gespeichert</div>
-          <div>${info.totalSizeMB} MB verwendet</div>
+          <div>💾 ${info.count} Mediendatei${info.count !== 1 ? 'en' : ''} gespeichert (${info.totalSizeMB} MB)</div>
+          <div>Projektspeicher: ${lsMB} MB${lsWarnung}</div>
         `;
       } catch (e) {
         infoEl.innerHTML = '';
@@ -9478,33 +10143,30 @@ WICHTIGE REGELN:
         source: 'local',
         url: '',
         filename: file.name,
-        localFileUrl: URL.createObjectURL(file),
+        localFileUrl: createTrackedObjectURL(file),
         type: isAudio ? 'audio' : 'video',
         szenen: [],
         notizen: '',
         audioStored: false
       };
-      
-      // Audio permanent in IndexedDB speichern
-      if (isAudio) {
-        try {
-          await saveAudioToDB(mediumId, file);
-          medium.audioStored = true;
-          console.log('✅ Audio permanent gespeichert');
-        } catch (e) {
-          console.error('Audio-Speicherung fehlgeschlagen:', e);
-          // Fallback: nur temporär
-        }
+
+      // Audio UND Video permanent in IndexedDB speichern
+      // (Blob-URLs überleben keinen Reload – ohne DB-Kopie wäre die Datei danach weg)
+      try {
+        await saveAudioToDB(mediumId, file);
+        medium.audioStored = true;
+        console.log('✅ ' + (isAudio ? 'Audio' : 'Video') + ' permanent gespeichert');
+      } catch (e) {
+        console.error('Medien-Speicherung fehlgeschlagen:', e);
+        alert('Hinweis: Die Datei konnte nicht dauerhaft gespeichert werden und ist nach einem Neuladen nicht mehr verfügbar.\n(' + (e.message || e) + ')');
       }
-      
+
       state.medien.push(medium);
       saveProjektDaten();
       render();
-      
+
       // Speicherinfo aktualisieren
-      if (isAudio) {
-        updateStorageInfo();
-      }
+      updateStorageInfo();
     }
     
     function addFromUrl() {
@@ -9749,13 +10411,20 @@ WICHTIGE REGELN:
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'audio/*,video/*';
-      input.onchange = (e) => {
+      input.onchange = async (e) => {
         const file = e.target.files[0];
         if (file) {
           const medium = state.medien.find(m => m.id === mediumId);
           if (medium) {
             medium.filename = file.name;
-            medium.localFileUrl = URL.createObjectURL(file);
+            medium.localFileUrl = createTrackedObjectURL(file);
+            // Auch dauerhaft in IndexedDB ablegen (überlebt Reload)
+            try {
+              await saveAudioToDB(mediumId, file);
+              medium.audioStored = true;
+            } catch (err) {
+              console.warn('Dauerhafte Speicherung fehlgeschlagen:', err);
+            }
             saveProjektDaten();
             render();
           }
@@ -9993,14 +10662,17 @@ WICHTIGE REGELN:
     async function deleteMedium(mediumId) {
       if (!confirm('Medium wirklich löschen?')) return;
       
-      // Audio aus IndexedDB löschen
+      // Audio/Video aus IndexedDB löschen
       const medium = state.medien.find(m => m.id === mediumId);
-      if (medium && medium.type === 'audio' && medium.audioStored) {
+      if (medium && medium.audioStored) {
         try {
           await deleteAudioFromDB(mediumId);
         } catch (e) {
-          console.warn('Audio-Löschung fehlgeschlagen:', e);
+          console.warn('Medien-Löschung fehlgeschlagen:', e);
         }
+      }
+      if (medium && medium.localFileUrl && medium.localFileUrl.startsWith('blob:')) {
+        revokeTrackedObjectURL(medium.localFileUrl);
       }
       
       // Zugehörige Cues löschen
@@ -11020,7 +11692,7 @@ WICHTIGE REGELN:
               block.className = 'format-dialog';
               const newDiv = document.createElement('div');
               newDiv.className = 'format-dialog';
-              newDiv.innerHTML = '<span class="figur-name">' + figurName + ':</span><span class="dialog-text">' + dialogText + '</span>';
+              newDiv.innerHTML = '<span class="figur-name">' + escapeHtml(figurName) + ':</span><span class="dialog-text">' + escapeHtml(dialogText) + '</span>';
               block.replaceWith(newDiv);
               return;
             }
@@ -13911,11 +14583,28 @@ ${chunkText}`;
           }
           
           if (matchedCues.length > 0) {
-            // Tabelle: Text links, Cue rechts als Randnotiz
+            // Tabelle: Text links, Cue rechts als Randnotiz.
+            // PAGES-KOMPATIBILITÄT: Apple Pages zeichnet bei fehlenden
+            // Tabellen-Rändern einen Standardrahmen («langgezogener Rahmen»)
+            // und setzt Prozentbreiten unzuverlässig um. Darum:
+            // - Ränder explizit auch auf TABELLEN-Ebene auf NONE
+            // - feste Spaltenbreiten in DXA statt Prozent
+            // - festes Tabellenlayout
+            // - kleine, explizite Zellinnenabstände
             const noBorder = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
             const noBorders = { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder };
-            
+            // A4 (11906) minus Ränder (1418 + 1134) = 9354 DXA Inhaltsbreite
+            const TEXT_COL_DXA = 7015;  // ~75 %
+            const CUE_COL_DXA = 2339;   // ~25 %
+            const cellMargins = { top: 20, bottom: 20, left: 60, right: 60 };
+
             children.push(new Table({
+              layout: (typeof docx !== 'undefined' && docx.TableLayoutType) ? docx.TableLayoutType.FIXED : undefined,
+              columnWidths: [TEXT_COL_DXA, CUE_COL_DXA],
+              borders: {
+                top: noBorder, bottom: noBorder, left: noBorder, right: noBorder,
+                insideHorizontal: noBorder, insideVertical: noBorder
+              },
               rows: [new TableRow({
                 children: [
                   new TableCell({
@@ -13923,9 +14612,9 @@ ${chunkText}`;
                       children: splitDialogRuns(text, style, font, dialogSize, textColor),
                       style: style || 'Standard'
                     })],
-                    width: { size: 75, type: WidthType.PERCENTAGE },
+                    width: { size: TEXT_COL_DXA, type: WidthType.DXA },
                     borders: noBorders,
-
+                    margins: cellMargins,
                   }),
                   new TableCell({
                     children: [new Paragraph({
@@ -13937,13 +14626,13 @@ ${chunkText}`;
                       spacing: { before: 20, after: 20 },
                       indent: { left: 80 }
                     })],
-                    width: { size: 25, type: WidthType.PERCENTAGE },
+                    width: { size: CUE_COL_DXA, type: WidthType.DXA },
                     borders: { top: noBorder, bottom: noBorder, right: noBorder, left: { style: BorderStyle.SINGLE, size: 4, color: 'D8B4FE', space: 4 } },
-
+                    margins: cellMargins,
                   })
                 ]
               })],
-              width: { size: 100, type: WidthType.PERCENTAGE }
+              width: { size: TEXT_COL_DXA + CUE_COL_DXA, type: WidthType.DXA }
             }));
             return;
           }
@@ -15038,10 +15727,13 @@ ${chunkText}`;
       // WICHTIG: Aktuellen Editor-Inhalt der bisherigen Szene sichern
       saveCurrentText(true);
       
-      // Suchen-Bar schliessen bei Szenenwechsel
-      const searchBar = document.getElementById('search-replace-bar');
-      if (searchBar) { searchBar.remove(); searchReplaceVisible = false; }
-      
+      // Suchen-Bar schliessen bei Szenenwechsel –
+      // ausser der Wechsel kommt von der dokumentweiten Suche selbst
+      if (!_preserveSearch) {
+        const searchBar = document.getElementById('search-replace-bar');
+        if (searchBar) { searchBar.remove(); searchReplaceVisible = false; }
+      }
+
       state.aktiveSzene = szeneId;
       // Stacks behalten — initUndoForScene() wird nach render() aufgerufen
       lastUndoContent = '';
@@ -15503,8 +16195,23 @@ ${chunkText}`;
       closeModal('showSzeneModal');
     }
 
+    // Zuletzt gelöschte Szene für «Rückgängig» aufbewahren
+    let _letzteGeloeschteSzene = null;
+    let _geloeschtToastTimer = null;
+
     function deleteSzene(szeneId) {
       if (!confirm('Szene wirklich löschen? Der Text wird auch gelöscht!')) return;
+
+      // Snapshot für Wiederherstellung sichern (Szene + Text + Cues + Position)
+      const szene = state.szenen.find(s => s.id === szeneId);
+      const index = state.szenen.findIndex(s => s.id === szeneId);
+      _letzteGeloeschteSzene = {
+        szene: JSON.parse(JSON.stringify(szene || {})),
+        index: index,
+        text: state.textbuch[szeneId] || '',
+        cues: JSON.parse(JSON.stringify(state.cues.filter(c => c.szeneId === szeneId)))
+      };
+
       state.szenen = state.szenen.filter(s => s.id !== szeneId);
       delete state.textbuch[szeneId];
       state.cues = state.cues.filter(c => c.szeneId !== szeneId);
@@ -15513,6 +16220,42 @@ ${chunkText}`;
       }
       saveProjektDaten();
       render();
+      _zeigeSzeneGeloeschtToast();
+    }
+
+    function _zeigeSzeneGeloeschtToast() {
+      const existing = document.getElementById('szene-geloescht-toast');
+      if (existing) existing.remove();
+      if (_geloeschtToastTimer) clearTimeout(_geloeschtToastTimer);
+      const toast = document.createElement('div');
+      toast.id = 'szene-geloescht-toast';
+      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(24,24,27,0.95);color:#e5e7eb;padding:10px 16px;border-radius:10px;font-size:13px;z-index:10000;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:flex;align-items:center;gap:12px;';
+      const name = escapeHtml((_letzteGeloeschteSzene?.szene?.nummer || '') + ' ' + (_letzteGeloeschteSzene?.szene?.titel || 'Szene'));
+      toast.innerHTML = 'Szene «' + name + '» gelöscht ' +
+        '<button onclick="undoDeleteSzene()" style="background:#3b82f6;border:none;color:white;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">Rückgängig</button>';
+      document.body.appendChild(toast);
+      _geloeschtToastTimer = setTimeout(() => {
+        toast.remove();
+        _letzteGeloeschteSzene = null; // Frist abgelaufen
+      }, 12000);
+    }
+
+    function undoDeleteSzene() {
+      if (!_letzteGeloeschteSzene) return;
+      const d = _letzteGeloeschteSzene;
+      _letzteGeloeschteSzene = null;
+      if (_geloeschtToastTimer) clearTimeout(_geloeschtToastTimer);
+      const toast = document.getElementById('szene-geloescht-toast');
+      if (toast) toast.remove();
+
+      const idx = Math.min(Math.max(d.index, 0), state.szenen.length);
+      state.szenen.splice(idx, 0, d.szene);
+      state.textbuch[d.szene.id] = d.text;
+      state.cues = state.cues.concat(d.cues || []);
+      state.aktiveSzene = d.szene.id;
+      saveProjektDaten();
+      render();
+      showFormatToast('Szene wiederhergestellt');
     }
     
     // NEU v1.4: Formatierung bereinigen (Word-Styles entfernen)
@@ -17093,7 +17836,7 @@ ${chunkText}`;
                 <div class="text-2xl mb-1">📁</div>
                 <p class="text-sm font-medium text-gray-700">Projektdatei öffnen (.json)</p>
                 <p class="text-xs text-gray-400">Von der Festplatte laden</p>
-                <input type="file" id="oeffnen-datei-input" accept=".json" class="hidden" onchange="oeffnenVonDatei(this)">
+                <input type="file" id="oeffnen-datei-input" accept=".json,.zip" class="hidden" onchange="oeffnenVonDatei(this)">
               </div>
               
               <!-- Letzte Projekte (lokal) -->
@@ -17130,10 +17873,18 @@ ${chunkText}`;
       // If called without an input element (e.g. from div onclick) and File System Access API is available
       if (window.showOpenFilePicker && (!input || !input.files)) {
         window.showOpenFilePicker({
-          types: [{ description: 'Rebu Projekt', accept: { 'application/json': ['.rebu.json', '.json'] } }]
+          types: [{ description: 'Rebu Projekt / Backup', accept: { 'application/json': ['.rebu.json', '.json'], 'application/zip': ['.zip'] } }]
         }).then(function(handles) {
           var handle = handles[0];
           return handle.getFile().then(function(file) {
+            // ZIP-Backup (inkl. Mediendateien)?
+            if (/\.zip$/i.test(file.name)) {
+              return importBackupZip(file).then(function() {
+                closeModal('showOeffnenModal');
+                state.dirty = false;
+                updateHeaderStatus();
+              });
+            }
             return file.text().then(function(text) {
               var data = JSON.parse(text);
               if (data._app === 'dramera') {
@@ -17159,6 +17910,17 @@ ${chunkText}`;
       if (input && input.files) {
         const file = input.files[0];
         if (!file) return;
+        // ZIP-Backup (inkl. Mediendateien)?
+        if (/\.zip$/i.test(file.name)) {
+          importBackupZip(file).then(function() {
+            closeModal('showOeffnenModal');
+            state.dirty = false;
+            updateHeaderStatus();
+          }).catch(function(err) {
+            alert('Fehler beim Öffnen des Backups: ' + err.message);
+          });
+          return;
+        }
         const reader = new FileReader();
         reader.onload = function(e) {
           try {
