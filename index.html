@@ -2091,6 +2091,119 @@
     }, true);  // CAPTURE phase
 
     // =====================================================
+    // RECHTSKLICK-MENÜ IM STÜCKTEXT
+    // Markiertes Wort / markierten Satz direkt als Requisit,
+    // Kostüm oder Cue (Licht/Ton/Video/Umbau) anlegen.
+    // =====================================================
+    let _textCtxMenuEl = null;
+
+    function hideTextContextMenu() {
+      if (_textCtxMenuEl) { _textCtxMenuEl.remove(); _textCtxMenuEl = null; }
+    }
+
+    document.addEventListener('click', hideTextContextMenu);
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideTextContextMenu(); }, true);
+
+    document.addEventListener('contextmenu', function(e) {
+      const editor = e.target && e.target.closest
+        ? (e.target.closest('#text-editor') || e.target.closest('.fliesstext-editor'))
+        : null;
+      if (!editor) { hideTextContextMenu(); return; }
+
+      // Szene bestimmen (Szenen-Modus: aktive Szene, Fliesstext: data-Attribut)
+      const szeneId = editor.id === 'text-editor' ? state.aktiveSzene : editor.dataset.szeneId;
+
+      // Markierten Text nehmen – oder das Wort unter dem Zeiger automatisch markieren
+      const sel = window.getSelection();
+      let text = sel ? sel.toString().trim() : '';
+      if (!text) {
+        let range = null;
+        if (document.caretRangeFromPoint) {
+          range = document.caretRangeFromPoint(e.clientX, e.clientY);
+        } else if (document.caretPositionFromPoint) {
+          const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
+          if (pos) { range = document.createRange(); range.setStart(pos.offsetNode, pos.offset); range.collapse(true); }
+        }
+        if (range && range.startContainer.nodeType === 3 && editor.contains(range.startContainer)) {
+          const t = range.startContainer.textContent;
+          let a = range.startOffset, b = range.startOffset;
+          const istWortzeichen = ch => /[A-Za-z0-9äöüÄÖÜéèêàâßçñ-]/.test(ch);
+          while (a > 0 && istWortzeichen(t[a - 1])) a--;
+          while (b < t.length && istWortzeichen(t[b])) b++;
+          if (b > a) {
+            const wordRange = document.createRange();
+            wordRange.setStart(range.startContainer, a);
+            wordRange.setEnd(range.startContainer, b);
+            sel.removeAllRanges();
+            sel.addRange(wordRange);
+            text = wordRange.toString().trim();
+          }
+        }
+      }
+      if (!text) return; // kein Text unter dem Zeiger → Standard-Browsermenü zulassen
+
+      e.preventDefault();
+      showTextContextMenu(e.clientX, e.clientY, text, szeneId);
+    });
+
+    function showTextContextMenu(x, y, text, szeneId) {
+      hideTextContextMenu();
+      const kurz = text.length > 42 ? text.substring(0, 42) + '…' : text;
+
+      const menu = document.createElement('div');
+      menu.id = 'text-context-menu';
+      menu.style.cssText = 'position:fixed;z-index:10001;background:white;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.18);padding:6px;min-width:250px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;';
+      // Auswahl darf durch Klicks im Menü nicht verloren gehen
+      menu.addEventListener('mousedown', function(ev) { ev.preventDefault(); });
+
+      const header = document.createElement('div');
+      header.style.cssText = 'padding:6px 10px 8px;color:#6b7280;font-size:11px;border-bottom:1px solid #f3f4f6;margin-bottom:4px;';
+      header.textContent = '«' + kurz + '»';
+      menu.appendChild(header);
+
+      const eintraege = [
+        { icon: '🎭', label: 'Als Requisit anlegen', action: function() { createRequisitFromSelection(text, szeneId); } },
+        { icon: '👗', label: 'Als Kostüm anlegen', action: function() { createKostuemFromSelection(text, szeneId); } },
+        'trenner',
+        { icon: '💡', label: 'Licht-Cue an dieser Stelle', action: function() { createCueFromSelection('lx', text, szeneId); } },
+        { icon: '🔊', label: 'Ton/Audio-Cue an dieser Stelle', action: function() { createCueFromSelection('q', text, szeneId); } },
+        { icon: '📺', label: 'Video-Cue an dieser Stelle', action: function() { createCueFromSelection('v', text, szeneId); } },
+        { icon: '🔄', label: 'Umbau-Cue an dieser Stelle', action: function() { createCueFromSelection('u', text, szeneId); } },
+      ];
+
+      eintraege.forEach(function(eintrag) {
+        if (eintrag === 'trenner') {
+          const hr = document.createElement('div');
+          hr.style.cssText = 'border-top:1px solid #f3f4f6;margin:4px 0;';
+          menu.appendChild(hr);
+          return;
+        }
+        const btn = document.createElement('button');
+        btn.style.cssText = 'display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 10px;border:none;background:none;border-radius:6px;cursor:pointer;font-size:13px;color:#111827;';
+        btn.onmouseenter = function() { btn.style.background = '#f3f4f6'; };
+        btn.onmouseleave = function() { btn.style.background = 'none'; };
+        btn.innerHTML = '<span>' + eintrag.icon + '</span><span>' + escapeHtml(eintrag.label) + '</span>';
+        btn.onclick = function(ev) {
+          ev.stopPropagation();
+          hideTextContextMenu();
+          eintrag.action();
+        };
+        menu.appendChild(btn);
+      });
+
+      document.body.appendChild(menu);
+      _textCtxMenuEl = menu;
+
+      // Position im Sichtbereich halten
+      const rect = menu.getBoundingClientRect();
+      let px = x, py = y;
+      if (px + rect.width > window.innerWidth - 8) px = window.innerWidth - rect.width - 8;
+      if (py + rect.height > window.innerHeight - 8) py = window.innerHeight - rect.height - 8;
+      menu.style.left = Math.max(8, px) + 'px';
+      menu.style.top = Math.max(8, py) + 'px';
+    }
+
+    // =====================================================
     // ZENTRALE FORMAT-DEFINITIONEN (Pages "Die Vollmacht")
     // Alle Modi und Exporte greifen auf diese Werte zu.
     // =====================================================
@@ -3794,7 +3907,7 @@ was morgen kommt – wer ist dabei?</p>
             state._lastStorageWarning = Date.now();
             alert('⚠️ Speichern fehlgeschlagen!\n\n' +
                   'Die Projektdaten konnten nicht in der Browser-Datenbank gesichert werden.\n\n' +
-                  'Bitte SOFORT ein Backup exportieren (💾 Sichern unter / Komplett-Backup ZIP)!');
+                  'Bitte SOFORT eine Sicherungskopie speichern (Menü → Sicherungskopie speichern, ⌘S)!');
           }
         }
       });
@@ -3926,9 +4039,9 @@ was morgen kommt – wer ist dabei?</p>
     // MANUELLES BACKUP
     // ============================================
     function manuellesBackupErstellen() {
-      var name = 'Manuelles Backup ' + new Date().toLocaleString('de-DE');
+      var name = 'Version vom ' + new Date().toLocaleString('de-CH');
       neueFassungSpeichern(name, 'manuell');
-      alert('Backup-Fassung erstellt: ' + name);
+      showFormatToast('🔖 Version festgehalten: ' + name);
     }
 
     // ============================================
@@ -3960,8 +4073,8 @@ was morgen kommt – wer ist dabei?</p>
       return Array.from(ids);
     }
 
-    async function exportAsZip() {
-      if (typeof JSZip === 'undefined') { alert('JSZip nicht geladen. Bitte Seite neu laden.'); return; }
+    // Erzeugt das komplette Backup-ZIP als Blob (Projekt + Fassungen + alle Medien)
+    async function generateBackupZipBlob() {
       var zip = new JSZip();
       var projectName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '').replace(/\s+/g, '_');
 
@@ -4018,17 +4131,22 @@ was morgen kommt – wer ist dabei?</p>
         zip.file('medien-manifest.json', JSON.stringify(manifest, null, 2));
       }
 
-      // Generieren und herunterladen
-      zip.generateAsync({ type: 'blob' }).then(function(content) {
-        var url = URL.createObjectURL(content);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = 'Rebu_Backup_' + projectName + '_' + new Date().toISOString().slice(0, 10) + '.zip';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      });
+      return zip.generateAsync({ type: 'blob' });
+    }
+
+    // Backup-ZIP als Download (Fallback, wenn kein Datei-Dialog verfügbar ist)
+    async function exportAsZip() {
+      if (typeof JSZip === 'undefined') { alert('JSZip nicht geladen. Bitte Seite neu laden.'); return; }
+      var projectName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '').replace(/\s+/g, '_');
+      const content = await generateBackupZipBlob();
+      var url = URL.createObjectURL(content);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'Rebu_Backup_' + projectName + '_' + new Date().toISOString().slice(0, 10) + '.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     }
 
     // ZIP-Backup importieren: Medien nach IndexedDB zurückschreiben, dann Projekt laden
@@ -4141,12 +4259,14 @@ was morgen kommt – wer ist dabei?</p>
     function scheduleAutoFileSave() {
       if (!savedFileHandle || !state.dirty) return;
       if (_autoFileSaveTimer) return; // already scheduled
+      // 3 Minuten: Die Sicherungskopie ist neu ein komplettes ZIP inkl. Medien –
+      // das soll nicht alle 30 Sekunden neu gepackt werden.
       _autoFileSaveTimer = setTimeout(function() {
         _autoFileSaveTimer = null;
         if (savedFileHandle && state.dirty) {
-          sichernProjekt(); // silent save to file
+          sichernProjekt(); // stilles Aktualisieren der Sicherungskopie
         }
-      }, 30000);
+      }, 180000);
     }
 
     // --- Save Reminder for new documents without a file handle ---
@@ -4422,45 +4542,10 @@ was morgen kommt – wer ist dabei?</p>
                 </div>
               </div>
               
-              <!-- KI-Einstellungen -->
-              <div class="border rounded-lg p-4 mb-4 bg-blue-50">
-                <h3 class="text-sm font-semibold text-gray-600 mb-3">🤖 KI-Assistent</h3>
-                <div>
-                  <label class="block text-xs font-medium text-gray-700 mb-1">Anthropic API Key</label>
-                  <div class="api-key-row">
-                    <input type="password" id="projekt-apikey" value="${apiKey}" 
-                           placeholder="sk-ant-api03-..." class="font-mono text-xs flex-1"
-                           onchange="saveApiKey(this.value); apiKeyStatus = 'idle'; render();">
-                    <button class="api-test-btn ${apiKeyStatus}" 
-                            onclick="testApiKey()"
-                            ${!apiKey || apiKeyStatus === 'testing' ? 'disabled' : ''}>
-                      ${apiKeyStatus === 'testing' ? '⏳' : apiKeyStatus === 'success' ? '✓ OK' : '🔍 Testen'}
-                    </button>
-                  </div>
-                  ${apiKeyStatus === 'success' ? `
-                    <div class="api-status success">✓ API-Key funktioniert!</div>
-                  ` : ''}
-                  ${apiKeyStatus === 'error' ? `
-                    <div class="api-status error">✗ ${apiKeyError || 'Key ungültig'}</div>
-                  ` : ''}
-                  ${apiKey && apiKeyStatus === 'idle' ? `
-                    <div class="api-status neutral">Key eingegeben – klicke "Testen" zur Prüfung</div>
-                  ` : ''}
-                  <p class="text-xs text-gray-400 mt-2">
-                    🔒 Der Key wird nur lokal im Browser gespeichert, nie übertragen.
-                    <br><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" class="text-blue-500 hover:underline">→ API-Key erstellen</a>
-                  </p>
-                  <div class="flex gap-2 mt-2">
-                    <button class="btn btn-xs btn-outline flex-1" onclick="exportApiKeyToFile()" ${!apiKey ? 'disabled' : ''} title="Key als Datei speichern — zum Wiederherstellen nach Browser-Reset">
-                      💾 Key sichern
-                    </button>
-                    <button class="btn btn-xs btn-outline flex-1" onclick="importApiKeyFromFile()" title="Key aus gesicherter Datei laden">
-                      📂 Key laden
-                    </button>
-                  </div>
-                </div>
+              <div class="bg-gray-50 rounded-lg p-2 mb-4 text-xs text-gray-500">
+                🤖 Den KI-Assistenten (API-Key) richtest du unter <strong>Menü → KI-Einstellungen…</strong> ein.
               </div>
-              
+
               <div class="flex gap-2 mt-6">
                 ${isEdit ? `
                   <button class="btn btn-danger" onclick="deleteProjekt('${p.id}')">🗑️ Löschen</button>
@@ -4474,6 +4559,47 @@ was morgen kommt – wer ist dabei?</p>
       `;
     }
     
+    // --- KI-Einstellungen (eigener, kleiner Dialog – getrennt von den Projekteinstellungen) ---
+    function renderKiSettingsModal() {
+      const apiKey = localStorage.getItem('nina_rebu_api_key') || '';
+      return `
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showKiSettingsModal')">
+          <div class="modal-content" style="max-width: 480px;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+              <h2 class="text-lg font-semibold">🤖 KI-Einstellungen</h2>
+              <button class="text-gray-400 hover:text-gray-600" onclick="closeModal('showKiSettingsModal')">✕</button>
+            </div>
+            <div class="modal-body">
+              <label class="block text-xs font-medium text-gray-700 mb-1">Anthropic API Key</label>
+              <div class="api-key-row">
+                <input type="password" id="projekt-apikey" value="${apiKey}"
+                       placeholder="sk-ant-api03-..." class="font-mono text-xs flex-1"
+                       onchange="saveApiKey(this.value); apiKeyStatus = 'idle'; render();">
+                <button class="api-test-btn ${apiKeyStatus}"
+                        onclick="testApiKey()"
+                        ${!apiKey || apiKeyStatus === 'testing' ? 'disabled' : ''}>
+                  ${apiKeyStatus === 'testing' ? '⏳' : apiKeyStatus === 'success' ? '✓ OK' : '🔍 Testen'}
+                </button>
+              </div>
+              ${apiKeyStatus === 'success' ? `<div class="api-status success">✓ API-Key funktioniert!</div>` : ''}
+              ${apiKeyStatus === 'error' ? `<div class="api-status error">✗ ${apiKeyError || 'Key ungültig'}</div>` : ''}
+              ${apiKey && apiKeyStatus === 'idle' ? `<div class="api-status neutral">Key eingegeben – klicke «Testen» zur Prüfung</div>` : ''}
+              <p class="text-xs text-gray-400 mt-2">
+                🔒 Der Key wird nur lokal in diesem Browser gespeichert und nur an die Anthropic-API übertragen.
+                <br><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" class="text-blue-500 hover:underline">→ API-Key erstellen</a>
+              </p>
+              <div class="flex gap-2 mt-3">
+                <button class="btn btn-xs btn-outline flex-1" onclick="importApiKeyFromFile()" title="Key aus einer Datei laden">
+                  📂 Key aus Datei laden
+                </button>
+              </div>
+              <button class="btn btn-outline w-full mt-4" onclick="closeModal('showKiSettingsModal')">Schliessen</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     // Titelbild-Handling
     let pendingTitelbild = null;
     let pendingTitelbildFile = null; // Original File für IndexedDB
@@ -5102,7 +5228,7 @@ was morgen kommt – wer ist dabei?</p>
         state.fassungen = state.fassungen.filter(f => f.id !== aelteste.id);
         alert('Hinweis: Das Limit von ' + MAX_MANUELLE_FASSUNGEN + ' manuellen Fassungen ist erreicht.\n\n' +
               'Die älteste Fassung «' + aelteste.name + '» wurde entfernt.\n' +
-              'Tipp: Exportiere wichtige Fassungen als Backup (💾 Sichern unter).');
+              'Tipp: Speichere regelmässig eine Sicherungskopie (⌘S).');
       }
       state.projektMeta.fassung = fassung.name;
       state.projektMeta.fassungsDatum = fassung.datum;
@@ -6906,7 +7032,7 @@ was morgen kommt – wer ist dabei?</p>
     function handleCloudSave() {
       closeProjektMenu();
       if (!CLOUD_ENABLED) {
-        alert('Die Cloud-Funktion ist in dieser Version deaktiviert.\n\nNutze «Sichern» oder «Komplett-Backup (ZIP)», um dein Projekt zu sichern.');
+        alert('Die Cloud-Funktion ist in dieser Version deaktiviert.\n\nNutze «Sicherungskopie speichern» (⌘S), um dein Projekt zu sichern.');
         return;
       }
       const istCloudProjekt = !!(currentCloudProjectId && isCloudMode);
@@ -6955,7 +7081,7 @@ was morgen kommt – wer ist dabei?</p>
     function toggleKiPanel() {
       const apiKey = getApiKey();
       if (!apiKey) {
-        alert('Bitte zuerst einen API-Key in den Projekt-Einstellungen hinterlegen.\n\n→ Klicke auf "⚙️ Einst." in der linken Sidebar.');
+        alert('Bitte zuerst einen API-Key hinterlegen.\n\n→ Menü (Projektname oben links) → KI-Einstellungen…');
         return;
       }
       
@@ -7099,7 +7225,7 @@ ${szene.zusammenfassung ? `Zusammenfassung: ${szene.zusammenfassung}` : ''}
       
       const apiKey = getApiKey();
       if (!apiKey) {
-        alert('Bitte zuerst einen API-Key in den Einstellungen hinterlegen.');
+        alert('Bitte zuerst einen API-Key hinterlegen (Menü → KI-Einstellungen…).');
         return;
       }
       
@@ -7151,7 +7277,7 @@ WICHTIGE REGELN:
             const errJson = JSON.parse(errText);
             errMsg = errJson.error?.message || errMsg;
             if (errMsg.includes('invalid x-api-key') || errMsg.includes('invalid_api_key')) {
-              errMsg = 'Ungültiger API-Key. Bitte überprüfe den Key in den Einstellungen.';
+              errMsg = 'Ungültiger API-Key. Bitte überprüfe den Key unter Menü → KI-Einstellungen…';
             } else if (errMsg.includes('rate_limit')) {
               errMsg = 'Zu viele Anfragen. Bitte warte kurz und versuche es erneut.';
             } else if (errMsg.includes('credit') || errMsg.includes('billing')) {
@@ -7180,7 +7306,7 @@ WICHTIGE REGELN:
         console.error('KI-Fehler:', err);
         state.kiMessages.push({ 
           role: 'assistant', 
-          content: `❌ Fehler: ${err.message}\n\n💡 Bitte prüfe deinen API-Key in den Projekt-Einstellungen.`
+          content: `❌ Fehler: ${err.message}\n\n💡 Bitte prüfe deinen API-Key unter Menü → KI-Einstellungen…`
         });
       } finally {
         state.kiLoading = false;
@@ -7496,6 +7622,7 @@ WICHTIGE REGELN:
         ${state.showTwinModal ? renderTwinModal() : ''}
         ${state.showOeffnenModal ? renderOeffnenModal() : ''}
         ${state.showSichernUnterModal ? renderSichernUnterModal() : ''}
+        ${state.showKiSettingsModal ? renderKiSettingsModal() : ''}
         ${state.showFassungModal ? renderFassungModal() : ''}
         ${state.showFigurModal ? renderFigurModal() : ''}
         ${state.showCueModal ? renderCueModal() : ''}
@@ -7751,19 +7878,13 @@ WICHTIGE REGELN:
                 </button>
                 
                 <div class="border-t border-white/10 my-1"></div>
-                
-                <!-- Sichern -->
+
+                <!-- Sicherungskopie: EIN Knopf, EIN Format (ZIP-Komplettbackup mit Medien) -->
                 <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); sichernProjekt()">
-                  <span>💾</span> Sichern
+                  <span>💾</span> Sicherungskopie speichern <span class="text-gray-500 text-xs ml-auto">⌘S</span>
                 </button>
-                <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); openModal('showSichernUnterModal')">
-                  <span>💾</span> Sichern unter…
-                </button>
-                <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); exportAsZip()">
-                  <span>📦</span> Komplett-Backup (ZIP)
-                </button>
-                <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); manuellesBackupErstellen()">
-                  <span>🔖</span> Backup jetzt erstellen
+                <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); sichernAnNeuemOrt()">
+                  <span>💾</span> An neuem Ort speichern… <span class="text-gray-500 text-xs ml-auto">⇧⌘S</span>
                 </button>
 
                 <div class="border-t border-white/10 my-1"></div>
@@ -7795,6 +7916,9 @@ WICHTIGE REGELN:
                 <!-- Einstellungen & Löschen -->
                 <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); openProjektModal(state.projektId)">
                   <span>⚙️</span> Projekteinstellungen…
+                </button>
+                <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3" onclick="closeProjektMenu(); openModal('showKiSettingsModal')">
+                  <span>🤖</span> KI-Einstellungen…
                 </button>
                 <button class="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3 text-red-400" onclick="closeProjektMenu(); deleteProjekt(state.projektId)">
                   <span>🗑️</span> Projekt löschen
@@ -7829,7 +7953,7 @@ WICHTIGE REGELN:
           <div class="p-3 border-t border-white/10">
             <button class="btn btn-sm w-full ${getApiKey() ? 'btn-purple' : 'btn-outline-light'}" 
                     onclick="toggleKiPanel()"
-                    title="${getApiKey() ? 'KI-Assistent öffnen' : 'API-Key in Einstellungen hinterlegen'}">
+                    title="${getApiKey() ? 'KI-Assistent öffnen' : 'API-Key unter Menü → KI-Einstellungen hinterlegen'}">
               🤖 KI-Assistent ${getApiKey() ? '' : '(Key fehlt)'}
             </button>
           </div>
@@ -9308,13 +9432,13 @@ WICHTIGE REGELN:
         <div class="flex-1 p-6 overflow-y-auto">
           <div class="max-w-3xl mx-auto">
             <div class="flex justify-between items-center mb-4">
-              <h2 class="text-lg font-semibold">Fassungs-Archiv</h2>
+              <h2 class="text-lg font-semibold">Versionen</h2>
               <div class="flex gap-2">
-                <button class="btn btn-outline" onclick="manuellesBackupErstellen()" title="Backup jetzt erstellen">
-                  🔖 Backup jetzt
+                <button class="btn btn-outline" onclick="manuellesBackupErstellen()" title="Aktuellen Stand als Version festhalten">
+                  🔖 Version festhalten
                 </button>
                 <button class="btn btn-success" onclick="openModal('showFassungModal')">
-                  💾 Aktuelle Fassung speichern
+                  💾 Fassung mit Namen speichern
                 </button>
               </div>
             </div>
@@ -9326,7 +9450,7 @@ WICHTIGE REGELN:
                 <div>
                   <p style="font-size: 13px; font-weight: 600; color: #92400e; margin: 0 0 4px 0;">Fassungen sind nur lokal im Browser!</p>
                   <p style="font-size: 12px; color: #a16207; margin: 0;">
-                    Fassungen dienen der Änderungsverfolgung im Textbuch. Um das Projekt sicher aufzubewahren, nutze <strong>Menü → Sichern</strong> oder <strong>Komplett-Backup (ZIP)</strong>.
+                    Fassungen dienen der Änderungsverfolgung im Textbuch. Um das Projekt sicher aufzubewahren, nutze <strong>Menü → Sicherungskopie speichern</strong> (⌘S).
                   </p>
                 </div>
               </div>
@@ -10994,7 +11118,7 @@ WICHTIGE REGELN:
                     <h4 style="font-size:13px; font-weight:600; color:#374151; margin-bottom:8px; margin-top:16px; text-transform:uppercase; letter-spacing:0.5px;">Speichern & Export</h4>
                     <table style="width:100%; font-size:12px; border-collapse:collapse;">
                       <tr><td style="padding:3px 0; color:#6b7280;">Sichern</td><td>Datei speichern (ohne Dialog)</td></tr>
-                      <tr><td style="padding:3px 0; color:#6b7280;">Sichern unter…</td><td>Neuer Speicherort wählen</td></tr>
+                      <tr><td style="padding:3px 0; color:#6b7280;">⇧⌘S</td><td>An neuem Ort speichern</td></tr>
                       <tr><td style="padding:3px 0; color:#6b7280;">Auto-Save</td><td>Jede Änderung wird in localStorage gesichert</td></tr>
                     </table>
                   </div>
@@ -11083,25 +11207,26 @@ WICHTIGE REGELN:
               <button class="text-gray-400 hover:text-gray-600" onclick="closeModal('showImportModal')">✕</button>
             </div>
             <div class="modal-body">
-              <!-- Tab-Navigation -->
-              <div class="flex border-b mb-4">
-                <button class="import-tab px-4 py-2 border-b-2 border-blue-500 text-blue-600 font-medium" data-tab="word" onclick="showImportTab('word')">
-                  📄 Word/PDF
-                </button>
-                <button class="import-tab px-4 py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-700" data-tab="nina" onclick="showImportTab('nina')" style="background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(20,184,166,0.1)); border-radius: 4px 4px 0 0;">
-                  🔄 Dramera
-                </button>
-                <button class="import-tab px-4 py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-700" data-tab="text" onclick="showImportTab('text')">
-                  📝 Text
-                </button>
+              <!-- EIN Import für alles: Format wird automatisch erkannt -->
+              ${importWizardStep === 'upload' ? `
+              <div id="universal-import-zone"
+                   class="border-2 border-dashed border-blue-300 rounded-xl p-8 mb-4 text-center cursor-pointer bg-blue-50 hover:bg-blue-100 transition-colors"
+                   onclick="document.getElementById('universal-import-input').click()"
+                   ondragover="event.preventDefault(); this.classList.add('bg-blue-100')"
+                   ondragleave="this.classList.remove('bg-blue-100')"
+                   ondrop="event.preventDefault(); this.classList.remove('bg-blue-100'); handleUniversalImportFile(event.dataTransfer)">
+                <div class="text-4xl mb-2">⬇️</div>
+                <p class="font-medium text-blue-800">Datei hierher ziehen oder klicken</p>
+                <p class="text-xs text-blue-600 mt-2">
+                  Das Format wird automatisch erkannt:<br>
+                  Sicherungskopie (.zip) · Projektdatei (.json) · Word (.docx) · PDF · Text (.txt/.md)
+                </p>
+                <input type="file" id="universal-import-input" accept=".zip,.json,.docx,.pdf,.txt,.md" class="hidden" onchange="handleUniversalImportFile(this)">
               </div>
-              
-              <div class="bg-gray-50 rounded-lg p-2 mb-4 text-xs text-gray-500">
-                💡 Um ein gesichertes Projekt zu <strong>öffnen</strong>, nutze <strong>Menü → Öffnen…</strong>
-              </div>
-              
-              <!-- Word/PDF Tab mit Wizard -->
-              <div id="import-tab-word">
+              ` : ''}
+
+              <!-- Word/PDF-Bereich (wird nach Format-Erkennung eingeblendet) -->
+              <div id="import-tab-word" style="display: ${importWizardStep === 'upload' ? 'none' : 'block'};">
                 ${importWizardStep === 'analyzing' ? `
                 <!-- SCHRITT 2: Analysieren -->
                 <div style="text-align: center; padding: 24px 0;">
@@ -11178,7 +11303,7 @@ WICHTIGE REGELN:
                   <button class="btn flex-1" id="import-word-merge-btn" style="background:#059669;color:white;" onclick="doImportWord(true)" disabled>➕ Einfügen</button>
                   ` : ''}
                 </div>
-                ${!hasApiKey ? `<p class="text-xs text-gray-400 mt-2">💡 Hinterlege einen API-Key in den Einstellungen für KI-gestützte Analyse mit Vorschau.</p>` : `<p class="text-xs text-gray-400 mt-2">🤖 <strong>KI-Analyse</strong>: Erkennt Figuren (mit Want/Need/Ghost), Beziehungen, Themen, Szenen mit Spannungsbogen und Cue-Vorschlägen.</p>`}
+                ${!hasApiKey ? `<p class="text-xs text-gray-400 mt-2">💡 Hinterlege einen API-Key (Menü → KI-Einstellungen) für KI-gestützte Analyse mit Vorschau.</p>` : `<p class="text-xs text-gray-400 mt-2">🤖 <strong>KI-Analyse</strong>: Erkennt Figuren (mit Want/Need/Ghost), Beziehungen, Themen, Szenen mit Spannungsbogen und Cue-Vorschlägen.</p>`}
                 `}
                 ${state.szenen.length > 0 ? `
                 <p class="text-xs text-gray-400 mt-2">💡 «In Projekt einfügen» behält bestehende Figuren, Szenen und Metadaten.</p>
@@ -11603,6 +11728,66 @@ WICHTIGE REGELN:
           btn.className = 'import-tab px-4 py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-700';
         }
       });
+    }
+
+    // UNIVERSAL-IMPORT: eine Fläche für alle Formate.
+    // Erkennt anhand der Datei selbst, was zu tun ist, und leitet in den richtigen Ablauf.
+    function handleUniversalImportFile(source) {
+      const file = source && source.files ? source.files[0] : source;
+      if (!file) return;
+      const name = (file.name || '').toLowerCase();
+
+      // 1) Sicherungskopie (ZIP) → Projekt öffnen inkl. Medien
+      if (name.endsWith('.zip')) {
+        if (!confirm('«' + file.name + '» als Projekt-Sicherungskopie öffnen?\n\nDas Projekt wird (in einem eigenen Projekt-Slot) geladen.')) return;
+        importBackupZip(file).then(() => {
+          closeModal('showImportModal');
+        }).catch(err => alert('Fehler beim Öffnen des Backups: ' + err.message));
+        return;
+      }
+
+      // 2) JSON: Projektdatei oder NINA-Exchange? → Inhalt anschauen
+      if (name.endsWith('.json')) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = JSON.parse(e.target.result);
+            if (data.format === 'nina-exchange') {
+              // Dramera/Propla-Austauschformat → bestehender Abgleich-Ablauf mit Vorschau
+              showImportTab('nina');
+              handleNinaImportFile({ files: [file] });
+            } else if (data._app || data.data) {
+              // Rebu-/Dramera-Projektdatei → als Projekt öffnen (eigener Slot)
+              if (!confirm('«' + file.name + '» als Projekt öffnen?')) return;
+              oeffneProjektAusDaten(data).then(() => {
+                closeModal('showImportModal');
+              }).catch(err => alert('Fehler beim Öffnen: ' + err.message));
+            } else {
+              alert('Diese JSON-Datei wird nicht erkannt (weder Projektdatei noch NINA-Exchange).');
+            }
+          } catch (err) {
+            alert('Datei konnte nicht gelesen werden: ' + err.message);
+          }
+        };
+        reader.readAsText(file);
+        return;
+      }
+
+      // 3) Word/PDF → bestehender Import-Assistent
+      if (name.endsWith('.docx') || name.endsWith('.pdf')) {
+        showImportTab('word');
+        handleDocumentFile({ files: [file] });
+        return;
+      }
+
+      // 4) Text/Markdown → Text-Import
+      if (name.endsWith('.txt') || name.endsWith('.md')) {
+        showImportTab('text');
+        handleTxtImportFile({ files: [file] });
+        return;
+      }
+
+      alert('Dieses Dateiformat wird nicht unterstützt.\n\nMöglich sind: .zip, .json, .docx, .pdf, .txt, .md');
     }
     
     // NINA-Exchange Import Handler
@@ -13901,9 +14086,9 @@ ${chunkText}`;
               </div>
               
               <div class="bg-gray-50 rounded-lg p-3 mt-4 text-xs text-gray-500">
-                💡 Um das Projekt zu <strong>sichern</strong> (Backup), nutze <strong>Menü → Sichern</strong> oder <strong>Sichern unter…</strong>
+                💡 Zum <strong>Sichern</strong> des Projekts gibt es genau einen Weg: <strong>Menü → Sicherungskopie speichern</strong> (⌘S).
               </div>
-              
+
               <button class="btn btn-outline w-full mt-4" onclick="closeModal('showExportModal')">Schliessen</button>
             </div>
           </div>
@@ -16175,35 +16360,64 @@ ${chunkText}`;
     }
 
     // NEU: Cue erstellen mit markiertem Text als Anker
-    function createCueFromSelection(typ = 'lx') {
-      const selection = window.getSelection();
-      let ankerText = '';
-      
-      if (selection && selection.toString().trim()) {
-        ankerText = selection.toString().trim();
-        // Auf max 200 Zeichen begrenzen
-        if (ankerText.length > 200) {
-          ankerText = ankerText.substring(0, 200) + '...';
+    function createCueFromSelection(typ = 'lx', ankerTextParam = null, szeneIdParam = null) {
+      let ankerText = ankerTextParam || '';
+
+      if (!ankerText) {
+        const selection = window.getSelection();
+        if (selection && selection.toString().trim()) {
+          ankerText = selection.toString().trim();
         }
       }
-      
+
+      // Auf max 200 Zeichen begrenzen
+      if (ankerText.length > 200) {
+        ankerText = ankerText.substring(0, 200) + '...';
+      }
+
       if (!ankerText) {
         alert('Bitte zuerst einen Text im Textbuch markieren.\n\nDieser Text wird als Positions-Anker für den Cue verwendet.');
         return;
       }
-      
-      state.editingCue = { 
-        typ: typ, 
-        nummer: '', 
-        beschreibung: '', 
-        szeneId: state.aktiveSzene, 
-        ausloeser: '', 
-        dauer: '', 
-        ankerText: ankerText 
+
+      state.editingCue = {
+        typ: typ,
+        nummer: '',
+        beschreibung: '',
+        szeneId: szeneIdParam || state.aktiveSzene,
+        ausloeser: '',
+        dauer: '',
+        ankerText: ankerText
       };
       state.showCueModal = true;
       render();
       setTimeout(updateCueModalForTyp, 50);
+    }
+
+    // === RECHTSKLICK IM STÜCKTEXT: Requisit/Kostüm direkt aus dem Text anlegen ===
+    function createRequisitFromSelection(text, szeneId) {
+      pendingRequisitenImages = [];
+      state.editingRequisit = {
+        name: text.length > 60 ? text.substring(0, 60) : text,
+        zustaendig: '', beschreibung: '',
+        szenen: szeneId ? [szeneId] : (state.aktiveSzene ? [state.aktiveSzene] : []),
+        bilder: [], notizen: ''
+      };
+      state.showRequisitenModal = true;
+      render();
+    }
+
+    function createKostuemFromSelection(text, szeneId) {
+      pendingKostuemBilder = [];
+      pendingMaskeBilder = [];
+      state.editingKostuem = {
+        name: text.length > 60 ? text.substring(0, 60) : text,
+        figur: '', beschreibung: '', maske: '',
+        szenen: szeneId ? [szeneId] : (state.aktiveSzene ? [state.aktiveSzene] : []),
+        notizen: '', kostuemBilder: [], maskeBilder: []
+      };
+      state.showKostuemModal = true;
+      render();
     }
 
     function saveCue() {
@@ -17936,47 +18150,43 @@ ${chunkText}`;
     // Globaler File Handle für "Sichern" (File System Access API)
     let savedFileHandle = null;
     
+    // SICHERUNGSKOPIE: ein Knopf, ein Format – das komplette ZIP (inkl. Medien).
+    // Merkt sich den Speicherort; ⌘S aktualisiert die Datei danach still.
     async function sichernProjekt(callback) {
       saveCurrentText(true); // WICHTIG: Aktuellen Editor-Inhalt in state übernehmen
       flushPendingSave(); // Ausstehende debounced Saves sofort ausführen
       saveProjektDaten(); // Alles lokal sichern
-      
-      const exportData = exportToDramera();
-      // Titelbild aus IndexedDB auflösen für Backup
-      if (exportData.data?.projektMeta?.titelbild?.startsWith('idb:')) {
-        exportData.data.projektMeta.titelbild = await resolveTitelbildForExport(exportData.data.projektMeta.titelbild);
+
+      if (typeof JSZip === 'undefined') {
+        alert('Die ZIP-Bibliothek ist nicht geladen. Bitte Seite neu laden.');
+        if (callback) callback();
+        return;
       }
-      const json = JSON.stringify(exportData, null, 2);
-      
+
+      const blob = await generateBackupZipBlob();
+
       // File System Access API verfügbar? (Chrome/Edge)
       if (window.showSaveFilePicker) {
         try {
-          // Bereits ein Handle vorhanden? → Still speichern
-          if (savedFileHandle) {
-            const writable = await savedFileHandle.createWritable();
-            await writable.write(json);
-            await writable.close();
-            state.filePath = savedFileHandle.name;
-            state.lastFileSaveTime = new Date();
-            state.dirty = false;
-            // Kurze Bestätigung anzeigen
-            showSaveConfirmation();
-            updateHeaderStatus();
-            if (callback) callback();
-            return;
+          // Alter .json-Speicherort aus früheren Versionen? → neuen Ort wählen (Format ist neu ZIP)
+          if (savedFileHandle && !/\.zip$/i.test(savedFileHandle.name || '')) {
+            savedFileHandle = null;
           }
 
-          // Erstmaliges Sichern → Picker öffnen
-          const filename = makeExportFilename('Backup', 'rebu.json');
-          savedFileHandle = await window.showSaveFilePicker({
-            suggestedName: filename,
-            types: [{
-              description: 'Rebu Projekt',
-              accept: { 'application/json': ['.rebu.json', '.json'] }
-            }]
-          });
+          if (!savedFileHandle) {
+            // Erstmaliges Sichern → Picker öffnen
+            const projectName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '').replace(/\s+/g, '_');
+            savedFileHandle = await window.showSaveFilePicker({
+              suggestedName: 'Rebu_' + projectName + '.zip',
+              types: [{
+                description: 'Rebu Sicherungskopie',
+                accept: { 'application/zip': ['.zip'] }
+              }]
+            });
+          }
+
           const writable = await savedFileHandle.createWritable();
-          await writable.write(json);
+          await writable.write(blob);
           await writable.close();
           state.filePath = savedFileHandle.name;
           state.lastFileSaveTime = new Date();
@@ -17996,11 +18206,25 @@ ${chunkText}`;
         }
       }
 
-      // Fallback für Safari/Firefox: Download wie bisher
-      await downloadDrameraExport();
+      // Fallback für Safari/Firefox: ZIP als Download
+      const projectName2 = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '').replace(/\s+/g, '_');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Rebu_Backup_' + projectName2 + '_' + new Date().toISOString().slice(0, 10) + '.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
       state.dirty = false;
       updateHeaderStatus();
       if (callback) callback();
+    }
+
+    // «An neuem Ort speichern…» – vergisst den gemerkten Speicherort und fragt neu
+    function sichernAnNeuemOrt() {
+      savedFileHandle = null;
+      sichernProjekt();
     }
     
     function showSaveConfirmation() {
@@ -18354,10 +18578,10 @@ const NINA_LOGO_BASE64 = '';
           sichernProjekt();
           return;
         }
-        // Ctrl/Cmd+Shift+S: Sichern unter
+        // Ctrl/Cmd+Shift+S: An neuem Ort speichern
         if ((e.ctrlKey || e.metaKey) && e.key === 's' && e.shiftKey) {
           e.preventDefault();
-          sichernUnter();
+          sichernAnNeuemOrt();
           return;
         }
         // ? öffnet Hilfe, aber nur wenn kein Input/Editor fokussiert
