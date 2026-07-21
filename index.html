@@ -1185,7 +1185,40 @@
     const MS_PER_DAY = 86400000;
     const FIGUR_ABBREV_LENGTH = 2;
     const KI_ANALYSIS_MAX_LENGTH = 35000;
-    const CLAUDE_MODEL = 'claude-sonnet-4-6';
+    // KI-Modell – zentral und in den KI-Einstellungen wählbar (mit Freitext als Zukunftssicherung).
+    const REBU_MODELL_DEFAULT = 'claude-sonnet-4-6';
+    const REBU_MODELLE = ['claude-sonnet-4-6', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-haiku-4-5'];
+    let CLAUDE_MODEL = (function () {
+      try { return localStorage.getItem('nina_rebu_modell') || REBU_MODELL_DEFAULT; } catch (e) { return REBU_MODELL_DEFAULT; }
+    })();
+    let rebuModellCustomMode = !REBU_MODELLE.includes(CLAUDE_MODEL);
+    function setRebuModell(id) {
+      CLAUDE_MODEL = (id && id.trim()) ? id.trim() : REBU_MODELL_DEFAULT;
+      try { localStorage.setItem('nina_rebu_modell', CLAUDE_MODEL); } catch (e) {}
+    }
+    function onRebuModellSelect(v) {
+      if (v === '__custom__') { rebuModellCustomMode = true; }
+      else { rebuModellCustomMode = false; setRebuModell(v); }
+      if (typeof render === 'function') render();
+    }
+
+    // KI-Aufruf mit Zeitlimit: bricht eine haengende Verbindung nach timeoutMs ab
+    // und meldet das verstaendlich, statt endlos zu warten.
+    async function rebuFetchWithTimeout(url, options, timeoutMs) {
+      const grenze = timeoutMs || 120000;
+      const ctrl = new AbortController();
+      const t = setTimeout(function () { ctrl.abort(); }, grenze);
+      try {
+        return await fetch(url, Object.assign({}, options, { signal: ctrl.signal }));
+      } catch (e) {
+        if (e && e.name === 'AbortError') {
+          throw new Error('Zeitüberschreitung: Die KI hat nicht innert ' + Math.round(grenze / 1000) + ' Sekunden geantwortet. Bitte erneut versuchen.');
+        }
+        throw e;
+      } finally {
+        clearTimeout(t);
+      }
+    }
 
     // ============================================
     // AUTO-RESIZE TEXTAREAS
@@ -3957,6 +3990,13 @@ was morgen kommt – wer ist dabei?</p>
       // Zeitstempel für Crash Recovery
       try { localStorage.setItem(KEYS.lastSaved, new Date().toISOString()); } catch(e) {}
 
+      // Mehr-Tab-Schutz: eigene Tab-Kennung als «letzter Schreiber» hinterlegen.
+      // Andere Tabs mit demselben Projekt erkennen daran, dass hier gespeichert
+      // wurde, und warnen, bevor sie einen älteren Stand darüberschreiben.
+      try {
+        localStorage.setItem(REBU_SAVE_OWNER_KEY, JSON.stringify({ tab: REBU_TAB_ID, projekt: state.projektId, ts: Date.now() }));
+      } catch (e) {}
+
       // Autosave-Indikator (bei IndexedDB-Fehler wird er oben async korrigiert)
       showAutosaveIndicator(true);
 
@@ -4562,6 +4602,8 @@ was morgen kommt – wer ist dabei?</p>
     // --- KI-Einstellungen (eigener, kleiner Dialog – getrennt von den Projekteinstellungen) ---
     function renderKiSettingsModal() {
       const apiKey = localStorage.getItem('nina_rebu_api_key') || '';
+      const zeigeCustomModell = rebuModellCustomMode || !REBU_MODELLE.includes(CLAUDE_MODEL);
+      const modellSelectVal = zeigeCustomModell ? '__custom__' : CLAUDE_MODEL;
       return `
         <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showKiSettingsModal')">
           <div class="modal-content" style="max-width: 480px;" onclick="event.stopPropagation()">
@@ -4588,6 +4630,18 @@ was morgen kommt – wer ist dabei?</p>
                 🔒 Der Key wird nur lokal in diesem Browser gespeichert und nur an die Anthropic-API übertragen.
                 <br><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" class="text-blue-500 hover:underline">→ API-Key erstellen</a>
               </p>
+
+              <label class="block text-xs font-medium text-gray-700 mb-1 mt-4">KI-Modell</label>
+              <select class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" onchange="onRebuModellSelect(this.value)">
+                <option value="claude-sonnet-4-6" ${modellSelectVal === 'claude-sonnet-4-6' ? 'selected' : ''}>Sonnet 4.6 – ausgewogen (Standard)</option>
+                <option value="claude-sonnet-5" ${modellSelectVal === 'claude-sonnet-5' ? 'selected' : ''}>Sonnet 5 – neuer</option>
+                <option value="claude-opus-4-8" ${modellSelectVal === 'claude-opus-4-8' ? 'selected' : ''}>Opus 4.8 – am stärksten (langsamer, teurer)</option>
+                <option value="claude-haiku-4-5" ${modellSelectVal === 'claude-haiku-4-5' ? 'selected' : ''}>Haiku 4.5 – schnell &amp; günstig</option>
+                <option value="__custom__" ${zeigeCustomModell ? 'selected' : ''}>Andere / eigene Modell-ID …</option>
+              </select>
+              ${zeigeCustomModell ? `<input type="text" value="${CLAUDE_MODEL}" oninput="setRebuModell(this.value)" placeholder="${REBU_MODELL_DEFAULT}" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono mt-1.5">` : ''}
+              <p class="text-xs text-gray-400 mt-2">Alle Modelle laufen über denselben API-Key. Opus ist am stärksten, aber langsamer und teurer; Sonnet ist der ausgewogene Standard. Bei «Andere» eine beliebige aktuelle Modell-ID von Anthropic eintragen.</p>
+
               <div class="flex gap-2 mt-3">
                 <button class="btn btn-xs btn-outline flex-1" onclick="importApiKeyFromFile()" title="Key aus einer Datei laden">
                   📂 Key aus Datei laden
@@ -6957,7 +7011,7 @@ was morgen kommt – wer ist dabei?</p>
       render();
       
       try {
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
+        const response = await rebuFetchWithTimeout('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -6970,26 +7024,33 @@ was morgen kommt – wer ist dabei?</p>
             max_tokens: 10,
             messages: [{ role: 'user', content: 'Antworte nur mit: OK' }]
           })
-        });
-        
+        }, 30000);
+
         if (response.ok) {
           apiKeyStatus = 'success';
         } else {
           const err = await response.json();
           apiKeyStatus = 'error';
+          const errMsg = err.error?.message || '';
           if (response.status === 401) {
             apiKeyError = 'Ungültiger API-Key';
           } else if (response.status === 403) {
             apiKeyError = 'Keine Berechtigung (Key gesperrt?)';
-          } else if (err.error?.message) {
-            apiKeyError = err.error.message;
+          } else if (response.status === 404 || /model/i.test(errMsg)) {
+            apiKeyError = 'Modell «' + CLAUDE_MODEL + '» nicht gefunden. Bitte in den KI-Einstellungen ein gültiges Modell wählen.';
+          } else if (errMsg) {
+            apiKeyError = errMsg;
           } else {
             apiKeyError = `Fehler ${response.status}`;
           }
         }
       } catch (err) {
         apiKeyStatus = 'error';
-        apiKeyError = 'Netzwerkfehler – bitte Verbindung prüfen';
+        // Zeitüberschreitung von rebuFetchWithTimeout verständlich weitergeben,
+        // sonst generischer Netzwerkfehler.
+        apiKeyError = (err && /Zeitüberschreitung/.test(err.message || ''))
+          ? err.message
+          : 'Netzwerkfehler – bitte Verbindung prüfen';
       }
       
       render();
@@ -7057,6 +7118,51 @@ was morgen kommt – wer ist dabei?</p>
     }
     
     // v2.0: Warnung beim Schließen (nur für lokale Projekte)
+    // ============================================
+    // MEHR-TAB-SCHUTZ
+    // Verhindert das stille gegenseitige Überschreiben, wenn dasselbe Projekt
+    // in zwei Browser-Tabs offen ist. Jeder Tab hat eine eigene Kennung; wer
+    // speichert, hinterlegt sie. Ein anderer Tab bemerkt das und warnt, statt
+    // seinen älteren Stand kommentarlos darüberzuschreiben.
+    // ============================================
+    var REBU_TAB_ID = 'tab-' + Math.random().toString(36).slice(2) + '-' + Date.now();
+    var REBU_SAVE_OWNER_KEY = STORAGE_PREFIX + 'save_owner';
+
+    function showTabConflictBanner() {
+      if (document.getElementById('rebu-tab-conflict')) return;
+      var bar = document.createElement('div');
+      bar.id = 'rebu-tab-conflict';
+      bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b45309;color:#fff;' +
+        'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;padding:10px 16px;' +
+        'display:flex;align-items:center;gap:12px;box-shadow:0 -2px 8px rgba(0,0,0,0.2);';
+      var txt = document.createElement('span');
+      txt.style.flex = '1';
+      txt.textContent = '⚠️ Dieses Projekt wurde in einem anderen Tab gespeichert. Wenn du hier weiterarbeitest und speicherst, überschreibst du den neueren Stand.';
+      var reload = document.createElement('button');
+      reload.textContent = 'Neu laden';
+      reload.style.cssText = 'background:#fff;color:#b45309;border:none;border-radius:4px;padding:6px 12px;font-weight:600;cursor:pointer;';
+      reload.onclick = function () { location.reload(); };
+      var dismiss = document.createElement('button');
+      dismiss.textContent = 'Trotzdem weiter';
+      dismiss.style.cssText = 'background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.6);border-radius:4px;padding:6px 12px;cursor:pointer;';
+      dismiss.onclick = function () { bar.remove(); };
+      bar.appendChild(txt);
+      bar.appendChild(reload);
+      bar.appendChild(dismiss);
+      document.body.appendChild(bar);
+    }
+
+    window.addEventListener('storage', function (e) {
+      if (!e.key || e.key !== REBU_SAVE_OWNER_KEY || !e.newValue) return;
+      try {
+        var info = JSON.parse(e.newValue);
+        if (info && info.tab && info.tab !== REBU_TAB_ID && info.projekt === state.projektId) {
+          state._externalSaveDetected = true;
+          showTabConflictBanner();
+        }
+      } catch (err) {}
+    });
+
     window.addEventListener('beforeunload', function(e) {
       // WICHTIG: Ausstehende Saves sofort ausführen beim Verlassen
       saveCurrentText(true);
@@ -7254,7 +7360,7 @@ WICHTIGE REGELN:
           .map(m => ({ role: m.role, content: m.content }));
         
         // API-Aufruf
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
+        const response = await rebuFetchWithTimeout('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -7268,8 +7374,8 @@ WICHTIGE REGELN:
             system: systemPrompt,
             messages: apiMessages
           })
-        });
-        
+        }, 90000);
+
         if (!response.ok) {
           const errText = await response.text();
           let errMsg = 'API-Fehler';
@@ -7290,15 +7396,19 @@ WICHTIGE REGELN:
         }
         
         const result = await response.json();
-        
+
         // Antwort extrahieren
         let fullText = '';
-        for (const block of result.content) {
+        for (const block of (result.content || [])) {
           if (block.type === 'text') {
             fullText += block.text;
           }
         }
-        
+        // Bei abgeschnittener Antwort (Token-Limit) einen deutlichen Hinweis anhaengen.
+        if (result.stop_reason === 'max_tokens') {
+          fullText += '\n\n— [Hinweis: Die Antwort wurde wegen des Token-Limits abgeschnitten.]';
+        }
+
         // Antwort hinzufügen
         state.kiMessages.push({ role: 'assistant', content: fullText.trim() });
         
@@ -7828,6 +7938,8 @@ WICHTIGE REGELN:
         { id: 'requisiten', icon: '🎭', label: 'Requisiten' },
         { id: 'kostueme', icon: '👗', label: 'Kostüme' },
         { id: 'medien', icon: '🎵', label: 'Medien' },
+        { id: 'cues', icon: '💡', label: 'Cue-Listen' },
+        { id: 'uebersichten', icon: '📊', label: 'Übersichten' },
         { id: 'fassungen', icon: '📚', label: 'Fassungen' },
         { id: 'konzept', icon: '🧭', label: 'Konzept' },
         { id: 'teamproben', icon: '👥', label: 'Team & Proben' },
@@ -8023,6 +8135,7 @@ WICHTIGE REGELN:
         case 'szenen': return renderSzenenView();
         case 'figuren': return renderFigurenView();
         case 'cues': return renderCuesView();
+        case 'uebersichten': return renderUebersichtenView();
         case 'buehne': return renderBuehneView();
         case 'requisiten': return renderRequisitenView();
         case 'kostueme': return renderKostuemeView();
@@ -8033,7 +8146,240 @@ WICHTIGE REGELN:
         default: return renderPlaceholder(state.currentView);
       }
     }
-    
+
+    // ============================================
+    // REGIE-ÜBERSICHTEN
+    // Figuren-Szenen-Matrix, Auftritts-/Abgangsliste, Strichverwaltung.
+    // Alle drei werten die vorhandenen Daten aus (szene.figuren, Textbuch-Striche);
+    // niemand muss dafür etwas Neues eingeben.
+    // ============================================
+    function setUebersichtTab(t) { state.uebersichtTab = t; render(); }
+
+    function uebersichtEmpty(msg) {
+      return `<div class="card p-8 text-center text-gray-400"><p>${escapeHtml(msg)}</p></div>`;
+    }
+
+    function figChip(f, cls) {
+      return `<span class="inline-block px-2 py-0.5 rounded text-xs font-medium ${cls || 'bg-gray-100 text-gray-700'}" title="${escapeHtml(f.name || '')}">${escapeHtml(f.kuerzel || f.name || '?')}</span>`;
+    }
+
+    function renderUebersichtenView() {
+      const tab = state.uebersichtTab || 'matrix';
+      const tabs = [
+        { id: 'matrix', label: '📊 Figuren-Szenen-Matrix' },
+        { id: 'auftritte', label: '🚪 Auftritte & Abgänge' },
+        { id: 'striche', label: '✂️ Strichverwaltung' },
+      ];
+      let inner = '';
+      if (tab === 'auftritte') inner = renderAuftrittsListe();
+      else if (tab === 'striche') inner = renderStrichverwaltung();
+      else inner = renderFigurenSzenenMatrix();
+      return `
+        <div class="flex-1 overflow-y-auto bg-gray-50">
+          <div class="max-w-6xl mx-auto p-6">
+            <h2 class="text-xl font-bold mb-1">Regie-Übersichten</h2>
+            <p class="text-sm text-gray-500 mb-4">Auswertungen aus deinem Stück – Bühnenpräsenz, Auftritte und Striche.</p>
+            <div class="flex gap-1 border-b border-gray-200 mb-5">
+              ${tabs.map(t => `
+                <button onclick="setUebersichtTab('${t.id}')"
+                  class="px-4 py-2 text-sm font-medium border-b-2 -mb-px ${tab === t.id ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}">
+                  ${t.label}
+                </button>`).join('')}
+            </div>
+            ${inner}
+          </div>
+        </div>`;
+    }
+
+    // --- Figuren-Szenen-Matrix ---
+    function renderFigurenSzenenMatrix() {
+      const szenen = state.szenen || [];
+      const figuren = state.figuren || [];
+      if (szenen.length === 0 || figuren.length === 0) {
+        return uebersichtEmpty('Für die Matrix brauchst du mindestens eine Figur und eine Szene.');
+      }
+      const drin = (s, f) => (s.figuren || []).includes(f.id);
+
+      const kopf = szenen.map(s =>
+        `<th class="px-1 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap" title="${escapeHtml(s.titel || '')}">${escapeHtml(s.nummer || '·')}</th>`
+      ).join('');
+
+      const zeilen = figuren.map(f => {
+        const zellen = szenen.map(s =>
+          `<td class="text-center px-2 py-1 border border-gray-100 ${drin(s, f) ? 'bg-blue-600 text-white font-bold' : 'text-gray-200'}">${drin(s, f) ? '●' : '·'}</td>`
+        ).join('');
+        const anzahl = szenen.filter(s => drin(s, f)).length;
+        return `<tr>
+          <th class="sticky left-0 z-10 bg-white px-2 py-1 text-left text-sm whitespace-nowrap border border-gray-100">
+            <span class="font-semibold">${escapeHtml(f.kuerzel || '')}</span> <span class="text-gray-400 font-normal">${escapeHtml(f.name || '')}</span>
+          </th>
+          ${zellen}
+          <td class="text-center px-2 text-xs text-gray-500 font-semibold">${anzahl}</td>
+        </tr>`;
+      }).join('');
+
+      const fuss = szenen.map(s =>
+        `<td class="text-center px-1 text-xs text-gray-500 font-medium">${(s.figuren || []).length}</td>`
+      ).join('');
+
+      // Doppelbesetzung: Figurenpaare ohne gemeinsame Szene
+      const aktive = figuren.filter(f => szenen.some(s => drin(s, f)));
+      const paare = [];
+      for (let i = 0; i < aktive.length; i++) {
+        for (let j = i + 1; j < aktive.length; j++) {
+          const a = aktive[i], b = aktive[j];
+          const gemeinsam = szenen.some(s => drin(s, a) && drin(s, b));
+          if (!gemeinsam) paare.push([a, b]);
+        }
+      }
+      const paareHtml = paare.slice(0, 40).map(([a, b]) =>
+        `<span class="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 rounded px-2 py-0.5 text-xs mr-2 mb-2">
+           ${escapeHtml(a.kuerzel || a.name || '?')} <span class="text-emerald-400">⟷</span> ${escapeHtml(b.kuerzel || b.name || '?')}
+         </span>`
+      ).join('');
+
+      return `
+        <div class="card p-4 overflow-x-auto">
+          <table class="border-collapse text-sm">
+            <thead>
+              <tr>
+                <th class="sticky left-0 z-10 bg-white px-2 py-2 text-left text-xs text-gray-400">Figur \\ Szene</th>
+                ${kopf}
+                <th class="px-2 text-xs text-gray-400">Σ</th>
+              </tr>
+            </thead>
+            <tbody>${zeilen}</tbody>
+            <tfoot>
+              <tr>
+                <th class="sticky left-0 z-10 bg-white px-2 py-1 text-left text-xs text-gray-400">Figuren je Szene</th>
+                ${fuss}
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+          <p class="text-xs text-gray-400 mt-3">● = Figur ist in der Szene. Rechte Spalte: Szenen je Figur. Fusszeile: Figuren je Szene.</p>
+        </div>
+        <div class="card p-4 mt-4">
+          <h3 class="text-sm font-semibold mb-2">Mögliche Doppelbesetzungen</h3>
+          ${paare.length === 0
+            ? '<p class="text-xs text-gray-400">Keine zwei Figuren sind durchgehend getrennt – jede teilt sich mit jeder mindestens eine Szene.</p>'
+            : `<p class="text-xs text-gray-500 mb-3">Diese Figurenpaare stehen nie gleichzeitig auf der Bühne und könnten von derselben Person gespielt werden${paare.length > 40 ? ' (erste 40 von ' + paare.length + ')' : ''}:</p>${paareHtml}`}
+        </div>`;
+    }
+
+    // --- Auftritts-/Abgangsliste ---
+    function renderAuftrittsListe() {
+      const szenen = state.szenen || [];
+      if (szenen.length === 0) {
+        return uebersichtEmpty('Noch keine Szenen vorhanden.');
+      }
+      const figById = id => state.figuren.find(f => f.id === id);
+      const present = szenen.map(s => (s.figuren || []).map(figById).filter(Boolean));
+
+      const bloecke = szenen.map((s, i) => {
+        const jetzt = present[i];
+        const vorher = i > 0 ? present[i - 1] : [];
+        const nachher = i < szenen.length - 1 ? present[i + 1] : [];
+        const idSet = arr => new Set(arr.map(f => f.id));
+        const vorherIds = idSet(vorher), nachherIds = idSet(nachher);
+        const auftritt = jetzt.filter(f => !vorherIds.has(f.id));
+        const abgang = jetzt.filter(f => !nachherIds.has(f.id));
+
+        const reihe = (label, arr, cls) => arr.length === 0 ? '' : `
+          <div class="flex items-start gap-2 mb-1">
+            <span class="text-xs text-gray-400 w-20 flex-shrink-0 pt-0.5">${label}</span>
+            <span class="flex-1">${arr.map(f => figChip(f, cls)).join(' ')}</span>
+          </div>`;
+
+        return `
+          <div class="card p-4 mb-3">
+            <h3 class="text-sm font-semibold mb-2">${escapeHtml(s.nummer || '')} ${escapeHtml(s.titel || '')}
+              ${(s.ort || s.zeit) ? `<span class="text-gray-400 font-normal">· ${escapeHtml([s.ort, s.zeit].filter(Boolean).join(' / '))}</span>` : ''}
+            </h3>
+            ${jetzt.length === 0 ? '<p class="text-xs text-gray-400">Keine Figuren zugeordnet.</p>' : `
+              ${reihe('Auf der Bühne', jetzt, 'bg-gray-100 text-gray-700')}
+              ${reihe('Auftritt', auftritt, 'bg-emerald-100 text-emerald-800')}
+              ${reihe('Abgang', abgang, 'bg-amber-100 text-amber-800')}
+            `}
+          </div>`;
+      }).join('');
+
+      return `
+        <div>
+          <p class="text-xs text-gray-400 mb-3">Abgeleitet aus der Figuren-Zuordnung je Szene: «Auftritt» = neu gegenüber der vorherigen Szene, «Abgang» = nicht mehr in der nächsten Szene. Feinheiten innerhalb einer Szene stehen im Textbuch.</p>
+          ${bloecke}
+        </div>`;
+    }
+
+    // --- Strichverwaltung ---
+    function getStricheInSzene(szeneId) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = state.textbuch[szeneId] || '';
+      const out = [];
+      tmp.querySelectorAll('.format-gestrichen').forEach((n, i) => out.push({ index: i, text: n.textContent || '' }));
+      return out;
+    }
+
+    function strichAufheben(szeneId, index) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = state.textbuch[szeneId] || '';
+      const nodes = tmp.querySelectorAll('.format-gestrichen');
+      if (index < 0 || index >= nodes.length) return;
+      nodes[index].replaceWith(document.createTextNode(nodes[index].textContent || ''));
+      state.textbuch[szeneId] = tmp.innerHTML;
+      saveProjektDaten();
+      render();
+    }
+
+    function alleStricheAufheben(szeneId) {
+      if (!confirm('Alle Striche dieser Szene aufheben? Der gestrichene Text wird wieder normal gespielt.')) return;
+      const tmp = document.createElement('div');
+      tmp.innerHTML = state.textbuch[szeneId] || '';
+      tmp.querySelectorAll('.format-gestrichen').forEach(n => n.replaceWith(document.createTextNode(n.textContent || '')));
+      state.textbuch[szeneId] = tmp.innerHTML;
+      saveProjektDaten();
+      render();
+    }
+
+    function renderStrichverwaltung() {
+      const szenen = state.szenen || [];
+      let total = 0, totalChars = 0;
+      const bloecke = szenen.map(s => {
+        const striche = getStricheInSzene(s.id);
+        if (striche.length === 0) return '';
+        total += striche.length;
+        striche.forEach(x => { totalChars += x.text.length; });
+        const items = striche.map(x => `
+          <div class="flex items-start gap-3 py-1.5 border-b border-gray-50 last:border-0">
+            <span class="flex-1 text-sm text-gray-400 line-through">${escapeHtml(x.text) || '<span class="text-gray-300">(leer)</span>'}</span>
+            <button onclick="strichAufheben('${s.id}', ${x.index})" class="text-xs text-blue-600 hover:text-blue-800 flex-shrink-0">aufheben</button>
+          </div>`).join('');
+        return `
+          <div class="card p-4 mb-3">
+            <div class="flex justify-between items-center mb-2">
+              <h3 class="text-sm font-semibold">${escapeHtml(s.nummer || '')} ${escapeHtml(s.titel || '')}
+                <span class="text-gray-400 font-normal">· ${striche.length} ${striche.length === 1 ? 'Strich' : 'Striche'}</span>
+              </h3>
+              <button onclick="alleStricheAufheben('${s.id}')" class="text-xs text-gray-500 hover:text-red-600">alle aufheben</button>
+            </div>
+            ${items}
+          </div>`;
+      }).join('');
+
+      if (total === 0) {
+        return uebersichtEmpty('In diesem Stück sind noch keine Striche gesetzt. Streichen kannst du im Textbuch über die Formatierung.');
+      }
+      return `
+        <div>
+          <div class="card p-4 mb-4 flex items-center gap-8">
+            <div><div class="text-2xl font-bold text-gray-700">${total}</div><div class="text-xs text-gray-500">Striche gesamt</div></div>
+            <div><div class="text-2xl font-bold text-gray-700">${totalChars}</div><div class="text-xs text-gray-500">gestrichene Zeichen</div></div>
+          </div>
+          ${bloecke}
+          <p class="text-xs text-gray-400 mt-2">«aufheben» macht einen Strich rückgängig – der Text wird wieder normal gespielt. Das ändert das Textbuch.</p>
+        </div>`;
+    }
+
     // ============================================
     // TITELBLATT VIEW (wie gedrucktes Regiebuch)
     // ============================================
@@ -12691,7 +13037,10 @@ WICHTIGE REGELN:
     // PDF-Datei mit pdf.js laden
     async function extractPDFContent(file) {
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      // isEvalSupported:false neutralisiert CVE-2024-4367 (Code-Ausfuehrung ueber
+      // praeparierte Schriften in einem importierten PDF). Offizielle Mitigation
+      // fuer Versionen vor 4.2.67.
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, isEvalSupported: false }).promise;
       
       let fullText = '';
       let richText = '';
@@ -13327,7 +13676,7 @@ Antworte NUR mit validem JSON:
 TEXT ZUR ANALYSE (Abschnitt ${chunkIndex + 1}/${totalChunks}):
 ${chunkText}`;
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const response = await rebuFetchWithTimeout('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -13340,7 +13689,7 @@ ${chunkText}`;
           max_tokens: 32000,
           messages: [{ role: 'user', content: prompt }]
         })
-      });
+      }, 180000);
 
       if (!response.ok) {
         const errText = await response.text();
@@ -13348,6 +13697,14 @@ ${chunkText}`;
       }
 
       const data = await response.json();
+      // Abgeschnittene Antwort (Token-Limit) frueh und verstaendlich melden,
+      // statt sie erst am kaputten JSON scheitern zu lassen.
+      if (data.stop_reason === 'max_tokens') {
+        throw new Error('Die KI-Antwort für Abschnitt ' + (chunkIndex + 1) + ' wurde wegen des Token-Limits abgeschnitten. Bitte den Text in kürzere Abschnitte aufteilen.');
+      }
+      if (!data.content || !data.content[0] || typeof data.content[0].text !== 'string') {
+        throw new Error('Unerwartete KI-Antwort für Abschnitt ' + (chunkIndex + 1) + '.');
+      }
       const aiText = data.content[0].text;
 
       // Robustes JSON-Parsen
@@ -14363,7 +14720,16 @@ ${chunkText}`;
       color: #414141;
       font-size: 10pt;
     }
-    
+    /* Striche und Ergänzungen im Druck sichtbar halten (Regiebuch-Fassung) */
+    .format-gestrichen {
+      text-decoration: line-through;
+      color: #9ca3af;
+    }
+    .format-ergaenzung {
+      color: #1e40af;
+      border-bottom: 1px solid #3b82f6;
+    }
+
     /* Cue-Markierungen entfernen für Druck */
     .cue-marker { display: none; }
     
@@ -14916,7 +15282,20 @@ ${chunkText}`;
       
       // Cue-Marker immer entfernen (wir fuegen eigene ein bei Technikfassung)
       temp.querySelectorAll('.cue-inline-marker, .cue-marker, .cue-badge').forEach(m => m.remove());
-      
+
+      // Striche und Ergaenzungen als Inline-Marker sichern, damit sie im Word-Export
+      // nicht verloren gehen. Die Change-Spans werden zu reinen Textknoten mit
+      // Steuerzeichen aus dem Private-Use-Bereich; splitDialogRuns baut daraus
+      // durchgestrichene bzw. unterstrichene Runs. Als Textknoten stoeren sie die
+      // vorhandene Absatz-Logik nicht mehr (kein eigener [class*="format-"]-Zweig).
+      // .. = gestrichen, .. = Ergaenzung.
+      temp.querySelectorAll('.format-gestrichen').forEach(function (s) {
+        s.replaceWith(document.createTextNode('' + s.textContent + ''));
+      });
+      temp.querySelectorAll('.format-ergaenzung').forEach(function (s) {
+        s.replaceWith(document.createTextNode('' + s.textContent + ''));
+      });
+
       // === Paragraph hinzufuegen ===
       function addParagraph(text, style, figurName) {
         if (!text || !text.trim()) return;
@@ -14943,8 +15322,9 @@ ${chunkText}`;
         
         const runs = [];
         
-        // Helper: Text in Runs aufteilen, Klammertexte in Dialog/Standard als Georgia/kursiv
-        function splitDialogRuns(text, style, font, size, color) {
+        // Helper: normalen Textabschnitt in Runs aufteilen — Klammertexte in
+        // Dialog/Standard als Georgia/kursiv, sonst ein einzelner Run.
+        function normalRuns(text, style, font, size, color) {
           if ((style !== 'Dialog' && style !== 'Standard') || !/\([^)]{2,}\)/.test(text)) {
             return [new TextRun({ text: text, size: size, font: font, color: color })];
           }
@@ -14954,6 +15334,44 @@ ${chunkText}`;
             }
             return new TextRun({ text: part, size: size, font: font, color: color });
           });
+        }
+
+        // Helper: Text in Runs aufteilen. Erkennt zusaetzlich die Change-Marker
+        // (Streichung E000/E001, Ergaenzung E002/E003) und baut daraus
+        // durchgestrichene bzw. unterstrichene Runs — so ueberleben Striche und
+        // Ergaenzungen den Word-Export.
+        function splitDialogRuns(text, style, font, size, color) {
+          var STRK_O = String.fromCharCode(0xE000), STRK_C = String.fromCharCode(0xE001);
+          var ERG_O = String.fromCharCode(0xE002), ERG_C = String.fromCharCode(0xE003);
+          // Schnellpfad: keine Marker vorhanden
+          if (text.indexOf(STRK_O) === -1 && text.indexOf(ERG_O) === -1) {
+            return normalRuns(text, style, font, size, color);
+          }
+          var out = [];
+          var mode = 'normal';
+          var buf = '';
+          function flush() {
+            if (!buf) return;
+            if (mode === 'strike') {
+              out.push(new TextRun({ text: buf, size: size, font: font, color: '9ca3af', strike: true }));
+            } else if (mode === 'erg') {
+              out.push(new TextRun({ text: buf, size: size, font: font, color: color, underline: {} }));
+            } else {
+              out.push.apply(out, normalRuns(buf, style, font, size, color));
+            }
+            buf = '';
+          }
+          for (var i = 0; i < text.length; i++) {
+            var ch = text[i];
+            if (ch === STRK_O) { flush(); mode = 'strike'; }
+            else if (ch === STRK_C) { flush(); mode = 'normal'; }
+            else if (ch === ERG_O) { flush(); mode = 'erg'; }
+            else if (ch === ERG_C) { flush(); mode = 'normal'; }
+            else { buf += ch; }
+          }
+          flush();
+          if (out.length === 0) out.push(new TextRun({ text: '', size: size, font: font, color: color }));
+          return out;
         }
         
         // Figurenname als eigener Absatz (Variante A)
@@ -14968,10 +15386,13 @@ ${chunkText}`;
         // Cue-Marker als Randnotiz (Technikfassung)
         if (includeCues && szeneCues.length > 0) {
           const matchedCues = [];
+          // Change-Marker fuer den Anker-Vergleich entfernen (der Anker-Text
+          // enthaelt keine Marker, der Absatztext evtl. schon).
+          const ankerText = text.replace(/[-]/g, '');
           for (const cue of szeneCues) {
             if (!cue.ankerText) continue;
             const anker = cue.ankerText.trim();
-            if (text.indexOf(anker) !== -1) {
+            if (ankerText.indexOf(anker) !== -1) {
               const prefix = CUE_TYPEN[cue.typ] ? CUE_TYPEN[cue.typ].prefix : (cue.typ ? cue.typ.toUpperCase() : 'CUE');
               matchedCues.push(prefix + cue.nummer + (cue.beschreibung ? ': ' + cue.beschreibung : ''));
             }
