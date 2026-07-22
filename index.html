@@ -7432,7 +7432,297 @@ ${szene.zusammenfassung ? `Zusammenfassung: ${szene.zusammenfassung}` : ''}
       
       return context;
     }
-    
+
+    // ============================================================
+    // KI-AKTIONEN – die KI darf Änderungen an den Daten vorschlagen,
+    // die der Nutzer bestätigt und danach rückgängig machen kann.
+    // Erweiterbar: neue Aktion = Eintrag im Schema-enum + ein Fall in
+    // fuehreKiAktionAus() + eine Zeile in beschreibeKiAktion().
+    // ============================================================
+    const REGIE_AKTIONEN_TOOL = {
+      name: 'regiebuch_aktionen',
+      description: 'Führe konkrete Änderungen am Regiebuch aus (nicht nur beschreiben). Nutze dieses Tool, sobald der Nutzer etwas ändern will: Szenen zusammenführen, umbenennen oder anlegen; Cues neu nummerieren; eine Figur ersetzen/umbenennen (auch im Dialogtext); Text in Szenen suchen und ersetzen. Sprich Szenen über ihre Nummer an (z.B. "1.1", "2") und Figuren über Name oder Kürzel. Der Nutzer sieht vor der Ausführung eine Vorschau und bestätigt selbst; du musst nicht um Erlaubnis fragen, sondern lieferst den Plan. Fasse zu einer Anfrage möglichst alle nötigen Aktionen in EINEM Aufruf zusammen.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          zusammenfassung: { type: 'string', description: 'Ein Satz, was der Plan insgesamt bewirkt.' },
+          aktionen: {
+            type: 'array',
+            description: 'Die Liste der auszuführenden Aktionen, in sinnvoller Reihenfolge.',
+            items: {
+              type: 'object',
+              properties: {
+                typ: { type: 'string', enum: ['szenen_zusammenfuehren', 'szene_umbenennen', 'szene_anlegen', 'cues_neu_nummerieren', 'figur_ersetzen', 'figur_anlegen', 'text_ersetzen'] },
+                szenenNummern: { type: 'array', items: { type: 'string' }, description: 'Für szenen_zusammenfuehren: die Nummern der Szenen, z.B. ["1.1","1.2","2"]. Die erste in Stückreihenfolge wird zur Zielszene.' },
+                szeneNummer: { type: 'string', description: 'Nummer einer einzelnen Szene (umbenennen, text_ersetzen in einer Szene).' },
+                titel: { type: 'string', description: 'Neuer/anzulegender Szenentitel.' },
+                ort: { type: 'string' },
+                zeit: { type: 'string' },
+                nummer: { type: 'string', description: 'Nummer für eine neu anzulegende Szene.' },
+                altFigur: { type: 'string', description: 'Für figur_ersetzen: Name oder Kürzel der bestehenden Figur.' },
+                neuName: { type: 'string', description: 'Neuer Figurenname (ersetzen/anlegen).' },
+                neuKuerzel: { type: 'string', description: 'Neues Kürzel der Figur (optional).' },
+                beschreibung: { type: 'string', description: 'Figurenbeschreibung beim Anlegen (optional).' },
+                textAnpassen: { type: 'boolean', description: 'Bei figur_ersetzen: auch die Namensnennungen im Dialogtext ersetzen (Standard: ja).' },
+                suchen: { type: 'string', description: 'Zu suchender Text (text_ersetzen).' },
+                ersetzen: { type: 'string', description: 'Ersatztext (text_ersetzen).' },
+                begruendung: { type: 'string', description: 'Kurze Begründung, dem Nutzer angezeigt.' }
+              },
+              required: ['typ']
+            }
+          }
+        },
+        required: ['aktionen']
+      }
+    };
+
+    function _kiResolveSzene(nummer) {
+      if (nummer == null) return null;
+      const n = String(nummer).trim().toLowerCase();
+      return state.szenen.find(s => String(s.nummer).trim().toLowerCase() === n) || null;
+    }
+    function _kiResolveFigur(nameOrKuerzel) {
+      if (!nameOrKuerzel) return null;
+      const n = String(nameOrKuerzel).trim().toLowerCase();
+      return state.figuren.find(f => (f.name || '').trim().toLowerCase() === n)
+          || state.figuren.find(f => (f.kuerzel || '').trim().toLowerCase() === n)
+          || state.figuren.find(f => (f.name || '').trim().toLowerCase().includes(n)) || null;
+    }
+    function _kiReplaceAll(hay, needle, repl) {
+      if (!needle) return hay;
+      return hay.split(needle).join(repl);
+    }
+
+    // Vollständigen Zustands-Schnappschuss für «Rückgängig» erstellen
+    function _kiSnapshot() {
+      return {
+        figuren: JSON.parse(JSON.stringify(state.figuren || [])),
+        szenen: JSON.parse(JSON.stringify(state.szenen || [])),
+        textbuch: JSON.parse(JSON.stringify(state.textbuch || {})),
+        cues: JSON.parse(JSON.stringify(state.cues || [])),
+        requisiten: JSON.parse(JSON.stringify(state.requisiten || [])),
+        kostueme: JSON.parse(JSON.stringify(state.kostueme || [])),
+        buehne: JSON.parse(JSON.stringify(state.buehne || [])),
+        medien: JSON.parse(JSON.stringify(state.medien || [])),
+        aktiveSzene: state.aktiveSzene
+      };
+    }
+    function _kiRestore(snap) {
+      if (!snap) return;
+      state.figuren = snap.figuren;
+      state.szenen = snap.szenen;
+      state.textbuch = snap.textbuch;
+      state.cues = snap.cues;
+      state.requisiten = snap.requisiten;
+      state.kostueme = snap.kostueme;
+      state.buehne = snap.buehne;
+      state.medien = snap.medien;
+      if (snap.aktiveSzene && state.szenen.some(s => s.id === snap.aktiveSzene)) {
+        state.aktiveSzene = snap.aktiveSzene;
+      }
+    }
+
+    // Menschliche Beschreibung einer Aktion (für die Vorschau)
+    function beschreibeKiAktion(a) {
+      switch (a.typ) {
+        case 'szenen_zusammenfuehren':
+          return `🔗 Szenen ${(a.szenenNummern || []).join(', ')} zu einer zusammenführen${a.titel ? ` («${a.titel}»)` : ''}`;
+        case 'szene_umbenennen':
+          return `✏️ Szene ${a.szeneNummer} umbenennen in «${a.titel}»`;
+        case 'szene_anlegen':
+          return `➕ Neue Szene «${a.titel || 'Ohne Titel'}»${a.nummer ? ` (Nr. ${a.nummer})` : ''}`;
+        case 'cues_neu_nummerieren':
+          return `🔢 Licht- und Ton-Cues neu durchnummerieren`;
+        case 'figur_ersetzen':
+          return `👤 Figur «${a.altFigur}» ersetzen durch «${a.neuName}»${a.textAnpassen === false ? '' : ' (auch im Dialogtext)'}`;
+        case 'figur_anlegen':
+          return `👤 Neue Figur «${a.neuName}»${a.neuKuerzel ? ` (${a.neuKuerzel})` : ''}`;
+        case 'text_ersetzen':
+          return `🔤 Text ersetzen${a.szeneNummer ? ` in Szene ${a.szeneNummer}` : ' in allen Szenen'}: «${a.suchen}» → «${a.ersetzen}»`;
+        default:
+          return `Aktion: ${a.typ}`;
+      }
+    }
+
+    // Eine einzelne Aktion ausführen; gibt einen Ergebnis-Satz zurück
+    function fuehreKiAktionAus(a) {
+      switch (a.typ) {
+        case 'cues_neu_nummerieren': {
+          renumberCuesInOrder(['lx', 'q']);
+          return 'Licht- und Ton-Cues neu nummeriert.';
+        }
+        case 'szene_umbenennen': {
+          const s = _kiResolveSzene(a.szeneNummer);
+          if (!s) return `Szene ${a.szeneNummer} nicht gefunden.`;
+          if (a.titel) s.titel = a.titel;
+          if (a.ort != null) s.ort = a.ort;
+          if (a.zeit != null) s.zeit = a.zeit;
+          return `Szene ${s.nummer} umbenannt in «${s.titel}».`;
+        }
+        case 'szene_anlegen': {
+          const id = genId();
+          const neu = {
+            id, nummer: a.nummer || String(state.szenen.length + 1),
+            titel: a.titel || 'Neue Szene', ort: a.ort || '', zeit: a.zeit || '',
+            zusammenfassung: a.beschreibung || '', figuren: []
+          };
+          state.szenen.push(neu);
+          state.textbuch[id] = '<p class="format-standard"><br></p>';
+          return `Neue Szene «${neu.titel}» angelegt.`;
+        }
+        case 'figur_anlegen': {
+          if (!a.neuName) return 'Kein Name für die neue Figur angegeben.';
+          state.figuren.push({ id: genId(), name: a.neuName, kuerzel: a.neuKuerzel || '', beschreibung: a.beschreibung || '' });
+          return `Figur «${a.neuName}» angelegt.`;
+        }
+        case 'figur_ersetzen': {
+          const f = _kiResolveFigur(a.altFigur);
+          if (!f) return `Figur «${a.altFigur}» nicht gefunden.`;
+          if (!a.neuName) return 'Kein neuer Name angegeben.';
+          const altName = f.name;
+          const altKuerzel = f.kuerzel;
+          f.name = a.neuName;
+          if (a.neuKuerzel) f.kuerzel = a.neuKuerzel;
+          if (a.beschreibung) f.beschreibung = a.beschreibung;
+          let ersetzt = 0;
+          if (a.textAnpassen !== false && altName) {
+            Object.keys(state.textbuch).forEach(sid => {
+              let t = state.textbuch[sid] || '';
+              const vorher = t;
+              t = _kiReplaceAll(t, altName, a.neuName);
+              t = _kiReplaceAll(t, altName.toUpperCase(), a.neuName.toUpperCase());
+              if (altKuerzel && a.neuKuerzel) {
+                t = _kiReplaceAll(t, altKuerzel.toUpperCase(), a.neuKuerzel.toUpperCase());
+              }
+              if (t !== vorher) { state.textbuch[sid] = t; ersetzt++; }
+            });
+          }
+          return `Figur «${altName}» durch «${a.neuName}» ersetzt${ersetzt ? `, Dialogtext in ${ersetzt} Szene(n) angepasst` : ''}.`;
+        }
+        case 'text_ersetzen': {
+          if (!a.suchen) return 'Kein Suchtext angegeben.';
+          const ziele = a.szeneNummer ? [_kiResolveSzene(a.szeneNummer)].filter(Boolean) : state.szenen;
+          let n = 0;
+          ziele.forEach(s => {
+            const t = state.textbuch[s.id] || '';
+            const neu = _kiReplaceAll(t, a.suchen, a.ersetzen || '');
+            if (neu !== t) { state.textbuch[s.id] = neu; n++; }
+          });
+          return `Text ersetzt in ${n} Szene(n).`;
+        }
+        case 'szenen_zusammenfuehren': {
+          const nummern = a.szenenNummern || [];
+          const gefunden = nummern.map(_kiResolveSzene).filter(Boolean);
+          if (gefunden.length < 2) return 'Zum Zusammenführen braucht es mindestens zwei gültige Szenen.';
+          // In Stückreihenfolge sortieren
+          const ordnung = {};
+          state.szenen.forEach((s, i) => { ordnung[s.id] = i; });
+          gefunden.sort((x, y) => ordnung[x.id] - ordnung[y.id]);
+          const ziel = gefunden[0];
+          const andere = gefunden.slice(1);
+          const andereIds = new Set(andere.map(s => s.id));
+          // Text zusammenführen (in Reihenfolge)
+          let text = state.textbuch[ziel.id] || '';
+          andere.forEach(s => {
+            const t = state.textbuch[s.id];
+            if (t && t.trim()) text += `\n<p class="format-standard"><br></p>\n${t}`;
+          });
+          state.textbuch[ziel.id] = text;
+          // Figuren vereinigen
+          const figSet = new Set(ziel.figuren || []);
+          andere.forEach(s => (s.figuren || []).forEach(fid => figSet.add(fid)));
+          ziel.figuren = Array.from(figSet);
+          // Cues umhängen
+          state.cues.forEach(c => { if (andereIds.has(c.szeneId)) c.szeneId = ziel.id; });
+          // Ausstattung: Szenen-Verweise umbiegen
+          [state.requisiten, state.kostueme, state.buehne, state.medien].forEach(liste => {
+            (liste || []).forEach(item => {
+              if (Array.isArray(item.szenen)) {
+                const neu = new Set();
+                item.szenen.forEach(sid => neu.add(andereIds.has(sid) ? ziel.id : sid));
+                item.szenen = Array.from(neu);
+              }
+            });
+          });
+          // Titel evtl. setzen
+          if (a.titel) ziel.titel = a.titel;
+          // Andere Szenen entfernen
+          state.szenen = state.szenen.filter(s => !andereIds.has(s.id));
+          andereIds.forEach(id => { delete state.textbuch[id]; });
+          if (andereIds.has(state.aktiveSzene)) state.aktiveSzene = ziel.id;
+          renumberCuesInOrder(['lx', 'q']);
+          return `Szenen ${nummern.join(', ')} zu «${ziel.nummer} ${ziel.titel}» zusammengeführt.`;
+        }
+        default:
+          return `Unbekannte Aktion: ${a.typ}`;
+      }
+    }
+
+    // Plan (aus einer Chat-Nachricht) ausführen – mit Schnappschuss für Rückgängig
+    function kiPlanAusfuehren(msgIndex) {
+      const msg = state.kiMessages[msgIndex];
+      if (!msg || !msg.plan || msg.planDone) return;
+      state.kiUndoSnapshot = { data: _kiSnapshot(), msgIndex };
+      const report = [];
+      (msg.plan.aktionen || []).forEach(a => {
+        try { report.push('• ' + fuehreKiAktionAus(a)); }
+        catch (e) { report.push('• Fehler bei ' + a.typ + ': ' + (e.message || e)); }
+      });
+      msg.planDone = true;
+      msg.planReport = report.join('\n');
+      msg.planKannZurueck = true;
+      saveProjektDaten();
+      render();
+    }
+    function kiPlanVerwerfen(msgIndex) {
+      const msg = state.kiMessages[msgIndex];
+      if (!msg || !msg.plan) return;
+      msg.planDone = true;
+      msg.planVerworfen = true;
+      render();
+    }
+    function kiPlanRueckgaengig(msgIndex) {
+      const snap = state.kiUndoSnapshot;
+      if (!snap || snap.msgIndex !== msgIndex) return;
+      _kiRestore(snap.data);
+      state.kiUndoSnapshot = null;
+      const msg = state.kiMessages[msgIndex];
+      if (msg) { msg.planKannZurueck = false; msg.planRueckgaengig = true; }
+      saveProjektDaten();
+      render();
+    }
+
+    // Vorschau-/Bestätigungskarte für einen Aktions-Plan im Chat
+    function renderKiPlanCard(msg, i) {
+      const aktionen = (msg.plan && msg.plan.aktionen) || [];
+      const liste = aktionen.map(a => {
+        const b = escapeHtml(beschreibeKiAktion(a));
+        const grund = a.begruendung ? `<div style="font-size:11px;color:#6b7280;margin-top:2px;">${escapeHtml(a.begruendung)}</div>` : '';
+        return `<li style="margin-bottom:6px;">${b}${grund}</li>`;
+      }).join('');
+      let footer;
+      if (!msg.planDone) {
+        footer = `<div style="display:flex;gap:6px;margin-top:8px;">
+          <button class="btn btn-sm btn-primary" style="flex:1;" onclick="kiPlanAusfuehren(${i})">✓ Ausführen</button>
+          <button class="btn btn-sm btn-outline" style="flex:1;" onclick="kiPlanVerwerfen(${i})">✗ Verwerfen</button>
+        </div>`;
+      } else if (msg.planVerworfen) {
+        footer = `<div style="font-size:12px;color:#9ca3af;margin-top:6px;">✗ Verworfen</div>`;
+      } else if (msg.planRueckgaengig) {
+        footer = `<div style="font-size:12px;color:#9ca3af;margin-top:6px;">↩ Rückgängig gemacht</div>`;
+      } else {
+        const report = msg.planReport ? `<div style="font-size:11px;color:#065f46;margin-top:6px;white-space:pre-line;">${escapeHtml(msg.planReport)}</div>` : '';
+        const undoBtn = (msg.planKannZurueck && state.kiUndoSnapshot && state.kiUndoSnapshot.msgIndex === i)
+          ? `<button class="btn btn-sm btn-outline" style="margin-top:8px;" onclick="kiPlanRueckgaengig(${i})">↩ Rückgängig</button>` : '';
+        footer = `<div style="font-size:12px;color:#065f46;font-weight:600;margin-top:6px;">✓ Ausgeführt</div>${report}${undoBtn}`;
+      }
+      return `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-top:8px;background:#fff;color:#111;">
+        <div style="font-size:12px;font-weight:600;color:#6d28d9;margin-bottom:6px;">🛠️ Geplante Aktionen${aktionen.length > 1 ? ' (' + aktionen.length + ')' : ''}</div>
+        <ul style="list-style:none;padding:0;margin:0;font-size:13px;">${liste}</ul>
+        ${footer}
+      </div>`;
+    }
+
     // Nachricht an KI senden
     async function sendKiMessage(userMessage) {
       if (!userMessage?.trim()) return;
@@ -7460,7 +7750,13 @@ WICHTIGE REGELN:
 - Bei Szenen-Analysen: Gehe auf dramaturgische Aspekte ein (Ziel, Konflikt, Wendepunkte)
 - Bei Dialog-Verbesserungen: Biete konkrete Alternativen an
 - Formatiere mit **fett** für wichtige Begriffe
-- Halte Antworten kompakt (max. 300 Wörter), ausser bei kreativen Aufgaben`;
+- Halte Antworten kompakt (max. 300 Wörter), ausser bei kreativen Aufgaben
+
+HANDELN STATT NUR BESCHREIBEN:
+- Wenn der Nutzer eine Änderung an den Daten wünscht (Szenen zusammenführen, umbenennen, anlegen; Cues neu nummerieren; eine Figur ersetzen/umbenennen – auch im Text; Text suchen/ersetzen), dann BESCHREIBE die Lösung nicht bloss, sondern rufe das Tool "regiebuch_aktionen" mit den konkreten Aktionen auf.
+- Sprich Szenen über ihre Nummer an (z.B. "1.1", "2"), Figuren über Name oder Kürzel.
+- Der Nutzer bekommt eine Vorschau und bestätigt selbst – du musst nicht um Erlaubnis bitten. Erkläre im Text kurz, was der Plan bewirkt.
+- Wenn zusätzlich Textvorschläge sinnvoll sind (z.B. angepasste Dialoge), nenne sie im Text und setze die konkreten Ersetzungen als text_ersetzen-Aktionen.`;
         
         // Nachrichten für API vorbereiten (ohne lokale Begrüssung)
         const apiMessages = state.kiMessages
@@ -7478,8 +7774,9 @@ WICHTIGE REGELN:
           },
           body: JSON.stringify({
             model: CLAUDE_MODEL,
-            max_tokens: 2000,
+            max_tokens: 4096,
             system: systemPrompt,
+            tools: [REGIE_AKTIONEN_TOOL],
             messages: apiMessages
           })
         }, 90000);
@@ -7505,11 +7802,14 @@ WICHTIGE REGELN:
         
         const result = await response.json();
 
-        // Antwort extrahieren
+        // Antwort extrahieren – Text UND evtl. Aktions-Plan (tool_use)
         let fullText = '';
+        let plan = null;
         for (const block of (result.content || [])) {
           if (block.type === 'text') {
             fullText += block.text;
+          } else if (block.type === 'tool_use' && block.name === 'regiebuch_aktionen') {
+            plan = block.input || null;
           }
         }
         // Bei abgeschnittener Antwort (Token-Limit) einen deutlichen Hinweis anhaengen.
@@ -7517,8 +7817,14 @@ WICHTIGE REGELN:
           fullText += '\n\n— [Hinweis: Die Antwort wurde wegen des Token-Limits abgeschnitten.]';
         }
 
-        // Antwort hinzufügen
-        state.kiMessages.push({ role: 'assistant', content: fullText.trim() });
+        // Antwort hinzufügen (Plan nur lokal – wird NICHT als tool_use in die
+        // API-Historie zurückgespielt, damit Folgeanfragen gültig bleiben).
+        const msg = { role: 'assistant', content: fullText.trim() };
+        if (plan && Array.isArray(plan.aktionen) && plan.aktionen.length > 0) {
+          msg.plan = plan;
+          if (!msg.content) msg.content = plan.zusammenfassung ? plan.zusammenfassung : 'Ich habe folgende Änderungen vorbereitet:';
+        }
+        state.kiMessages.push(msg);
         
       } catch (err) {
         console.error('KI-Fehler:', err);
@@ -7591,6 +7897,7 @@ WICHTIGE REGELN:
                   const formatted = escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
                   return `<p>${formatted}</p>`;
                 }).join('')}
+                ${msg.plan ? renderKiPlanCard(msg, i) : ''}
               </div>
             `).join('')}
             
