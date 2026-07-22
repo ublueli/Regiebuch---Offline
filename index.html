@@ -2689,6 +2689,21 @@
           sort_order: c.sortOrder || 0
         })),
 
+        // v4.0: Szenenblöcke nach exakt gleicher Besetzung (für die Probenplanung
+        // in Propla). Nach Schauspieler:innen gruppiert, sobald eine Besetzung
+        // vorliegt, sonst nach Rollen.
+        scene_blocks: computeSzenenbloecke().map((b, i) => ({
+          id: 'block-' + (i + 1),
+          scene_count: b.scenes.length,
+          casting_based: b.hatCasting,
+          besetzung_figures: b.figIds.map(fId => {
+            const f = state.figuren.find(x => x.id === fId);
+            return f ? (f._exchangeId || f.id) : fId;
+          }),
+          besetzung_persons: b.personIds.slice(),
+          scene_ids: b.scenes.map(s => s._exchangeId || s.id)
+        })),
+
         rehearsals: (state.probeplan || []).map(p => ({
           id: p.id || genId(), date: p.datum || '',
           start_time: (p.zeit || '').split('–')[0]?.trim() || '',
@@ -2733,7 +2748,28 @@
         team: (state.team || []).map(p => ({
           id: p.id, name: p.name || '', function: p.funktion || '',
           notes: p.notizen || '', email: p.email || '', phone: p.telefon || ''
-        }))
+        })),
+
+        // Kanonisches Personen-Feld (wie Werkbank/Propla): Ensemble und Team
+        // zusammengeführt mit Kategorie. So übernimmt Propla Personen und – über
+        // die castings – die Besetzung direkt. Die Felder ensemble/team bleiben
+        // für Rückwärtskompatibilität erhalten.
+        persons: [
+          ...(state.ensemble || []).map(p => ({
+            id: p.id, name: p.name || '', category: 'ensemble',
+            role: 'Schauspiel', function: 'Schauspiel',
+            email: p.email || '', phone: p.telefon || '',
+            notes: p.notizen || '',
+            address: { street: p.strasse || p.adresse || '', number: p.hausnummer || '', zip: p.plz || '', city: p.ort || '' }
+          })),
+          ...(state.team || []).map(p => ({
+            id: p.id, name: p.name || '', category: 'artistic_team',
+            role: p.funktion || '', function: p.funktion || '',
+            email: p.email || '', phone: p.telefon || '',
+            notes: p.notizen || '',
+            address: { street: p.strasse || p.adresse || '', number: p.hausnummer || '', zip: p.plz || '', city: p.ort || '' }
+          }))
+        ]
       };
     }
 
@@ -7739,6 +7775,8 @@ WICHTIGE REGELN:
         ${state.showSzeneModal ? renderSzeneModal() : ''}
         ${state.showKostuemModal ? renderKostuemModal() : ''}
         ${state.showRequisitenModal ? renderRequisitenModal() : ''}
+        ${state.showPersonModal ? renderPersonModal() : ''}
+        ${state.showKonfliktModal ? renderKonfliktModal() : ''}
         ${state.showBuehneModal ? renderBuehneModal() : ''}
         ${state.showLightbox ? renderLightbox() : ''}
         ${showCueExportDialog ? renderCueExportDialog() : ''}
@@ -8168,10 +8206,12 @@ WICHTIGE REGELN:
       const tabs = [
         { id: 'matrix', label: '📊 Figuren-Szenen-Matrix' },
         { id: 'auftritte', label: '🚪 Auftritte & Abgänge' },
+        { id: 'bloecke', label: '🧩 Probenblöcke' },
         { id: 'striche', label: '✂️ Strichverwaltung' },
       ];
       let inner = '';
       if (tab === 'auftritte') inner = renderAuftrittsListe();
+      else if (tab === 'bloecke') inner = renderProbenbloecke();
       else if (tab === 'striche') inner = renderStrichverwaltung();
       else inner = renderFigurenSzenenMatrix();
       return `
@@ -8339,6 +8379,86 @@ WICHTIGE REGELN:
       state.textbuch[szeneId] = tmp.innerHTML;
       saveProjektDaten();
       render();
+    }
+
+    // --- Probenblöcke (Szenen mit exakt gleicher Besetzung) ---
+    // Gruppiert nach Schauspieler:innen, sobald die Besetzung im Ensemble
+    // eingetragen ist (Doppelbesetzung wird so korrekt zusammengefasst); solange
+    // keine Besetzung vorliegt, ersatzweise nach Rollen. Dieselbe Berechnung
+    // speist die Ansicht und den NINA-Export an Propla.
+    function computeSzenenbloecke() {
+      const szenen = state.szenen || [];
+      const rolleZuPerson = {};
+      (state.ensemble || []).forEach(p => {
+        (p.rolleIds || []).forEach(fId => {
+          if (!rolleZuPerson[fId]) rolleZuPerson[fId] = [];
+          rolleZuPerson[fId].push(p.id);
+        });
+      });
+      const hatCasting = Object.keys(rolleZuPerson).length > 0;
+
+      const gruppen = new Map();
+      szenen.forEach(s => {
+        const figIds = (s.figuren || []).slice();
+        const tokens = new Set();
+        const personIds = new Set();
+        figIds.forEach(fId => {
+          const persons = rolleZuPerson[fId];
+          if (persons && persons.length) {
+            persons.forEach(pid => { tokens.add('p:' + pid); personIds.add(pid); });
+          } else {
+            tokens.add('r:' + fId);
+          }
+        });
+        const key = Array.from(tokens).sort().join('|');
+        if (!gruppen.has(key)) gruppen.set(key, { key, figIds: new Set(), personIds: new Set(), scenes: [] });
+        const g = gruppen.get(key);
+        figIds.forEach(id => g.figIds.add(id));
+        personIds.forEach(id => g.personIds.add(id));
+        g.scenes.push(s);
+      });
+
+      const bloecke = Array.from(gruppen.values()).map(g => ({
+        figIds: Array.from(g.figIds),
+        personIds: Array.from(g.personIds),
+        scenes: g.scenes,
+        hatCasting
+      }));
+      bloecke.sort((a, b) => b.scenes.length - a.scenes.length);
+      return bloecke;
+    }
+
+    function renderProbenbloecke() {
+      const szenen = state.szenen || [];
+      if (szenen.length === 0) return uebersichtEmpty('Noch keine Szenen vorhanden.');
+      const bloecke = computeSzenenbloecke();
+      const personName = id => (state.ensemble.find(p => p.id === id) || {}).name || '?';
+      const mehrfach = bloecke.filter(b => b.scenes.length > 1).length;
+
+      const bloeckeHtml = bloecke.map((b, i) => {
+        const leer = b.figIds.length === 0 && b.personIds.length === 0;
+        const wer = b.personIds.length
+          ? b.personIds.map(pid => figChip({ name: personName(pid), kuerzel: personName(pid) }, 'bg-indigo-100 text-indigo-800')).join(' ')
+          : b.figIds.map(fid => figChip(state.figuren.find(x => x.id === fid) || {}, 'bg-gray-100 text-gray-700')).join(' ');
+        const szenenHtml = b.scenes.map(s =>
+          `<span class="inline-block bg-white border border-gray-200 rounded px-2 py-0.5 text-xs mr-1 mb-1">${escapeHtml(s.nummer || '')} ${escapeHtml(s.titel || '')}</span>`
+        ).join('');
+        return `
+          <div class="card p-4 mb-3">
+            <div class="flex justify-between items-center mb-2">
+              <h3 class="text-sm font-semibold">Block ${i + 1} <span class="text-gray-400 font-normal">· ${b.scenes.length} ${b.scenes.length === 1 ? 'Szene' : 'Szenen'}</span></h3>
+            </div>
+            <div class="mb-2">${leer ? '<span class="text-xs text-gray-400">Keine Figuren zugeordnet</span>' : wer}</div>
+            <div>${szenenHtml}</div>
+          </div>`;
+      }).join('');
+
+      const casting = bloecke.length > 0 && bloecke[0].hatCasting;
+      return `
+        <div>
+          <p class="text-xs text-gray-400 mb-3">Szenen mit exakt gleicher Besetzung – gruppiert ${casting ? 'nach Schauspieler:innen (Doppelbesetzung berücksichtigt)' : 'nach Rollen (im Ensemble ist noch keine Besetzung eingetragen)'}. Blöcke mit mehreren Szenen lassen sich am Stück proben. ${mehrfach} von ${bloecke.length} ${bloecke.length === 1 ? 'Block bündelt' : 'Blöcken bündeln'} mehr als eine Szene. Diese Blöcke gehen auch an Propla.</p>
+          ${bloeckeHtml}
+        </div>`;
     }
 
     function renderStrichverwaltung() {
@@ -10628,35 +10748,53 @@ WICHTIGE REGELN:
       `;
     }
     
+    function fmtPersonAdresse(p) {
+      const zeile1 = [p.strasse, p.hausnummer].filter(Boolean).join(' ');
+      const zeile2 = [p.plz, p.ort].filter(Boolean).join(' ');
+      const s = [zeile1, zeile2].filter(Boolean).join(', ');
+      return s || p.adresse || '';
+    }
+
     function renderEnsembleTab() {
       const items = state.ensemble || [];
-      return items.length === 0 ? `
-        <div class="text-center text-gray-400 py-12">
-          <div class="text-4xl mb-3">🎭</div>
-          <p class="text-sm">Noch kein Ensemble importiert</p>
-          <p class="text-xs mt-2">Importiere Ensemble-Daten aus dem Probeplan (Propla)<br>über <strong>Import → NINA-Exchange</strong></p>
-        </div>
-      ` : `
+      const kopf = `
+        <div class="flex justify-end mb-3">
+          <button class="btn btn-primary btn-sm" onclick="openPersonModal('ensemble')">+ Person</button>
+        </div>`;
+      if (items.length === 0) {
+        return kopf + `
+          <div class="text-center text-gray-400 py-12">
+            <div class="text-4xl mb-3">🎭</div>
+            <p class="text-sm">Noch keine Ensemble-Mitglieder</p>
+            <p class="text-xs mt-2">Lege sie mit «+ Person» an oder importiere sie aus dem Probeplaner Propla (Menü → Importieren).</p>
+          </div>`;
+      }
+      return kopf + `
         <div class="space-y-3">
           ${items.map(p => {
             const rollen = (p.rolleIds || []).map(rid => {
               const fig = state.figuren.find(f => f.id === rid);
               return fig ? fig.name : '';
             }).filter(Boolean).join(', ');
+            const adr = fmtPersonAdresse(p);
             return `
               <div class="border border-teal-200 bg-teal-50 rounded-lg p-4">
-                <div class="flex items-center justify-between">
+                <div class="flex items-start justify-between">
                   <div>
-                    <span class="font-medium">${p.name || 'Unbenannt'}</span>
-                    ${rollen ? `<span class="text-sm text-teal-600 ml-2">→ ${rollen}</span>` : ''}
+                    <span class="font-medium">${escapeHtml(p.name || 'Unbenannt')}</span>
+                    ${rollen ? `<span class="text-sm text-teal-600 ml-2">→ ${escapeHtml(rollen)}</span>` : ''}
+                  </div>
+                  <div class="flex gap-2 flex-shrink-0">
+                    <button class="text-gray-400 hover:text-teal-600 text-sm" title="Bearbeiten" onclick="openPersonModal('ensemble','${p.id}')">✏️</button>
+                    <button class="text-gray-400 hover:text-red-500 text-sm" title="Löschen" onclick="deletePerson('ensemble','${p.id}')">🗑️</button>
                   </div>
                 </div>
                 <div class="text-xs text-gray-500 mt-1 flex flex-wrap gap-3">
-                  ${p.email ? `<span>✉️ ${p.email}</span>` : ''}
-                  ${p.telefon ? `<span>📞 ${p.telefon}</span>` : ''}
-                  ${p.adresse ? `<span>📍 ${p.adresse}</span>` : ''}
+                  ${p.email ? `<span>✉️ ${escapeHtml(p.email)}</span>` : ''}
+                  ${p.telefon ? `<span>📞 ${escapeHtml(p.telefon)}</span>` : ''}
+                  ${adr ? `<span>📍 ${escapeHtml(adr)}</span>` : ''}
                 </div>
-                ${p.notizen ? `<p class="text-xs text-gray-500 mt-2 italic">${p.notizen}</p>` : ''}
+                ${p.notizen ? `<p class="text-xs text-gray-500 mt-2 italic">${escapeHtml(p.notizen)}</p>` : ''}
               </div>
             `;
           }).join('')}
@@ -10666,27 +10804,195 @@ WICHTIGE REGELN:
     
     function renderTeamTab() {
       const items = state.team || [];
-      return items.length === 0 ? `
-        <div class="text-center text-gray-400 py-12">
-          <div class="text-4xl mb-3">🎨</div>
-          <p class="text-sm">Noch kein künstlerisches Team importiert</p>
-          <p class="text-xs mt-2">Importiere Team-Daten aus dem Probeplan (Propla)<br>über <strong>Import → NINA-Exchange</strong></p>
-        </div>
-      ` : `
+      const kopf = `
+        <div class="flex justify-end mb-3">
+          <button class="btn btn-primary btn-sm" onclick="openPersonModal('team')">+ Person</button>
+        </div>`;
+      if (items.length === 0) {
+        return kopf + `
+          <div class="text-center text-gray-400 py-12">
+            <div class="text-4xl mb-3">🎨</div>
+            <p class="text-sm">Noch kein künstlerisches Team</p>
+            <p class="text-xs mt-2">Lege es mit «+ Person» an oder importiere es aus dem Probeplaner Propla (Menü → Importieren).</p>
+          </div>`;
+      }
+      return kopf + `
         <div class="space-y-3">
-          ${items.map(p => `
+          ${items.map(p => {
+            const adr = fmtPersonAdresse(p);
+            return `
             <div class="border border-teal-200 bg-teal-50 rounded-lg p-4">
-              <div class="flex items-center gap-3">
-                <span class="font-medium">${p.name || 'Unbenannt'}</span>
-                ${p.funktion ? `<span class="text-sm bg-teal-200 text-teal-800 px-2 py-0.5 rounded">${p.funktion}</span>` : ''}
+              <div class="flex items-start justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="font-medium">${escapeHtml(p.name || 'Unbenannt')}</span>
+                  ${p.funktion ? `<span class="text-sm bg-teal-200 text-teal-800 px-2 py-0.5 rounded">${escapeHtml(p.funktion)}</span>` : ''}
+                </div>
+                <div class="flex gap-2 flex-shrink-0">
+                  <button class="text-gray-400 hover:text-teal-600 text-sm" title="Bearbeiten" onclick="openPersonModal('team','${p.id}')">✏️</button>
+                  <button class="text-gray-400 hover:text-red-500 text-sm" title="Löschen" onclick="deletePerson('team','${p.id}')">🗑️</button>
+                </div>
               </div>
               <div class="text-xs text-gray-500 mt-1 flex flex-wrap gap-3">
-                ${p.email ? `<span>✉️ ${p.email}</span>` : ''}
-                ${p.telefon ? `<span>📞 ${p.telefon}</span>` : ''}
+                ${p.email ? `<span>✉️ ${escapeHtml(p.email)}</span>` : ''}
+                ${p.telefon ? `<span>📞 ${escapeHtml(p.telefon)}</span>` : ''}
+                ${adr ? `<span>📍 ${escapeHtml(adr)}</span>` : ''}
               </div>
-              ${p.notizen ? `<p class="text-xs text-gray-500 mt-2 italic">${p.notizen}</p>` : ''}
+              ${p.notizen ? `<p class="text-xs text-gray-500 mt-2 italic">${escapeHtml(p.notizen)}</p>` : ''}
             </div>
-          `).join('')}
+          `;}).join('')}
+        </div>
+      `;
+    }
+
+    // ---- Person bearbeiten (Ensemble / Team) ----
+    function openPersonModal(kind, id) {
+      let p;
+      if (id) {
+        const src = kind === 'team' ? (state.team || []) : (state.ensemble || []);
+        p = { ...(src.find(x => x.id === id) || {}) };
+      } else {
+        p = { id: '', name: '', email: '', telefon: '', strasse: '', hausnummer: '', plz: '', ort: '', notizen: '', rolleIds: [], funktion: '' };
+      }
+      p._kind = kind;
+      state.editingPerson = p;
+      state.showPersonModal = true;
+      render();
+    }
+
+    function deletePerson(kind, id) {
+      if (!confirm('Diese Person löschen?')) return;
+      if (kind === 'team') {
+        state.team = (state.team || []).filter(x => x.id !== id);
+        save(KEYS.team(state.projektId), state.team);
+      } else {
+        state.ensemble = (state.ensemble || []).filter(x => x.id !== id);
+        save(KEYS.ensemble(state.projektId), state.ensemble);
+      }
+      render();
+    }
+
+    function savePersonModal() {
+      const p = state.editingPerson;
+      if (!p) return;
+      const val = (elId) => { const el = document.getElementById(elId); return el ? el.value.trim() : ''; };
+      const name = val('person-name');
+      if (!name) { alert('Bitte einen Namen eingeben.'); return; }
+      const kind = p._kind;
+      const daten = {
+        id: p.id || genId(),
+        name: name,
+        email: val('person-email'),
+        telefon: val('person-telefon'),
+        strasse: val('person-strasse'),
+        hausnummer: val('person-hausnummer'),
+        plz: val('person-plz'),
+        ort: val('person-ort'),
+        notizen: val('person-notizen'),
+        _ninaId: p._ninaId || null
+      };
+      if (kind === 'team') {
+        daten.funktion = val('person-funktion');
+        const list = (state.team || []).slice();
+        const idx = list.findIndex(x => x.id === daten.id);
+        if (idx !== -1) list[idx] = { ...list[idx], ...daten }; else list.push(daten);
+        state.team = list;
+        save(KEYS.team(state.projektId), state.team);
+      } else {
+        // Rollen-Zuordnung aus den Checkboxen
+        const rolleIds = Array.from(document.querySelectorAll('.person-rolle-check:checked')).map(c => c.value);
+        daten.rolleIds = rolleIds;
+        const list = (state.ensemble || []).slice();
+        const idx = list.findIndex(x => x.id === daten.id);
+        if (idx !== -1) list[idx] = { ...list[idx], ...daten }; else list.push(daten);
+        state.ensemble = list;
+        save(KEYS.ensemble(state.projektId), state.ensemble);
+      }
+      state.showPersonModal = false;
+      state.editingPerson = null;
+      render();
+    }
+
+    function renderPersonModal() {
+      const p = state.editingPerson || {};
+      const kind = p._kind || 'ensemble';
+      const istTeam = kind === 'team';
+      const isEdit = !!p.id;
+      return `
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showPersonModal')">
+          <div class="modal-content" style="max-width: 560px;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+              <h2 class="text-lg font-semibold">${isEdit ? '✏️' : (istTeam ? '🎨' : '🎭')} ${isEdit ? 'Person bearbeiten' : (istTeam ? 'Neues Team-Mitglied' : 'Neues Ensemble-Mitglied')}</h2>
+              <button class="text-gray-400 hover:text-gray-600" onclick="closeModal('showPersonModal')">✕</button>
+            </div>
+            <div class="modal-body">
+              <div class="grid grid-cols-2 gap-4 mb-3">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                  <input type="text" id="person-name" value="${escapeHtml(p.name || '')}" autocomplete="off">
+                </div>
+                ${istTeam ? `
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Funktion</label>
+                  <input type="text" id="person-funktion" value="${escapeHtml(p.funktion || '')}" placeholder="Regie, Bühne, Licht…" autocomplete="off">
+                </div>` : `
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Telefon</label>
+                  <input type="text" id="person-telefon" value="${escapeHtml(p.telefon || '')}" autocomplete="off">
+                </div>`}
+              </div>
+              <div class="grid grid-cols-2 gap-4 mb-3">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">E-Mail</label>
+                  <input type="text" id="person-email" value="${escapeHtml(p.email || '')}" autocomplete="off">
+                </div>
+                ${istTeam ? `
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Telefon</label>
+                  <input type="text" id="person-telefon" value="${escapeHtml(p.telefon || '')}" autocomplete="off">
+                </div>` : '<div></div>'}
+              </div>
+              <div class="grid grid-cols-3 gap-3 mb-3">
+                <div class="col-span-2">
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Strasse</label>
+                  <input type="text" id="person-strasse" value="${escapeHtml(p.strasse || (p.adresse || ''))}" autocomplete="off">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Nr.</label>
+                  <input type="text" id="person-hausnummer" value="${escapeHtml(p.hausnummer || '')}" autocomplete="off">
+                </div>
+              </div>
+              <div class="grid grid-cols-3 gap-3 mb-3">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">PLZ</label>
+                  <input type="text" id="person-plz" value="${escapeHtml(p.plz || '')}" autocomplete="off">
+                </div>
+                <div class="col-span-2">
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Ort</label>
+                  <input type="text" id="person-ort" value="${escapeHtml(p.ort || '')}" autocomplete="off">
+                </div>
+              </div>
+              ${!istTeam ? `
+              <div class="mb-3">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Spielt Rolle(n)</label>
+                <div class="max-h-28 overflow-y-auto border rounded p-2">
+                  ${(state.figuren || []).length === 0 ? '<span class="text-xs text-gray-400">Noch keine Figuren angelegt</span>' :
+                    (state.figuren || []).map(f => `
+                      <label class="flex items-center gap-2 text-sm py-0.5">
+                        <input type="checkbox" class="person-rolle-check" value="${f.id}" ${(p.rolleIds || []).includes(f.id) ? 'checked' : ''}>
+                        <span>${escapeHtml(f.name || '')}</span>
+                      </label>`).join('')}
+                </div>
+              </div>` : ''}
+              <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Notizen</label>
+                <input type="text" id="person-notizen" value="${escapeHtml(p.notizen || '')}" autocomplete="off">
+              </div>
+              <div class="flex gap-2">
+                <button class="btn btn-outline flex-1" onclick="closeModal('showPersonModal')">Abbrechen</button>
+                <button class="btn btn-primary flex-1" onclick="savePersonModal()">💾 Speichern</button>
+              </div>
+            </div>
+          </div>
         </div>
       `;
     }
@@ -11494,11 +11800,20 @@ WICHTIGE REGELN:
                   <p style="margin-bottom:12px;"><strong>Änderungen:</strong> Zeigt Unterschiede zur letzten gespeicherten Fassung.</p>
                   
                   <h4 style="font-weight:600; margin-bottom:6px;">KI-Assistent</h4>
-                  <p>Der Dramaturgie-Assistent (KI-Button rechts unten) kann bei Textanalyse, Figurenentwicklung und Szenenbeschreibungen helfen. 
+                  <p style="margin-bottom:12px;">Der Dramaturgie-Assistent (KI-Button rechts unten) kann bei Textanalyse, Figurenentwicklung und Szenenbeschreibungen helfen.
                      Er kennt dein gesamtes Projekt und kann kontextbezogen beraten.</p>
+
+                  <h4 style="font-weight:600; margin-bottom:6px;">Übersichten</h4>
+                  <p style="margin-bottom:12px;">Das Modul «Übersichten» wertet dein Stück aus: die <strong>Figuren-Szenen-Matrix</strong> zeigt, wer in welcher Szene steht (und schlägt mögliche Doppelbesetzungen vor), die <strong>Auftritts- und Abgangsliste</strong> zeigt pro Szene, wer neu dazukommt und wer abgeht, die <strong>Probenblöcke</strong> bündeln Szenen mit gleicher Besetzung, und die <strong>Strichverwaltung</strong> sammelt alle Striche im Stück und lässt sie einzeln wieder aufheben.</p>
+
+                  <h4 style="font-weight:600; margin-bottom:6px;">Team & Proben</h4>
+                  <p style="margin-bottom:12px;">Hier verwaltest du das <strong>Ensemble</strong> (die realen Schauspieler:innen mit Kontakt und Adresse), das <strong>künstlerische Team</strong> und den <strong>Probeplan</strong>. Diese Daten kannst du direkt hier pflegen oder mit dem Probeplaner Propla austauschen (siehe unten).</p>
+
+                  <h4 style="font-weight:600; margin-bottom:6px;">Austausch mit Propla</h4>
+                  <p>Rebu und der Probeplaner <strong>Propla</strong> gehören zusammen: Über Menü → Exportieren gibst du Figuren, Szenen und Besetzung an Propla weiter; über Menü → Importieren liest du das Ensemble, das Team und den Probeplan aus Propla ein. Beim Einlesen übernimmt Rebu alles Neue automatisch, und wo sich etwas widerspricht – eine geänderte Adresse oder Mailadresse – fragt es Feld für Feld nach, sodass du selbst entscheidest, was übernommen wird.</p>
                 </div>
               </div>
-              
+
               <!-- Über Tab -->
               <div id="help-tab-about" style="display:none;">
                 <div style="font-size:13px; line-height:1.7; color:#374151;">
@@ -11514,6 +11829,14 @@ WICHTIGE REGELN:
                   <p style="margin-bottom:12px;">
                     <strong>Browser-Kompatibilität:</strong> Optimiert für Chrome, Edge und Safari. 
                     «Sichern»-Funktion mit Datei-Handle nur in Chrome/Edge verfügbar.
+                  </p>
+                  <p style="margin-bottom:12px;">
+                    <strong>Teil der N!NA-Werkzeuge:</strong> Rebu wird zusammen mit dem Probeplaner Propla und weiteren Apps auf
+                    <a href="https://dramera.ch" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:underline;">dramera.ch</a> bereitgestellt.
+                  </p>
+                  <p style="margin-bottom:12px;">
+                    Entwickelt von <strong>Ueli Blum</strong>. Für Fragen, Rückmeldungen und Anregungen:
+                    <a href="https://ueliblum.ch/kontakt/" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:underline;">ueliblum.ch/kontakt</a>.
                   </p>
                   <p style="color:#9ca3af; font-size:11px;">
                     Standalone HTML-Applikation. Keine Installation nötig.
@@ -12630,54 +12953,90 @@ WICHTIGE REGELN:
         }
         
         // === PERSONEN IMPORTIEREN (Ensemble + Künstlerisches Team) ===
+        // Id-basiert zusammenführen statt ersetzen: bestehende Einträge bleiben
+        // erhalten, leere Felder werden gefüllt, und echte Widersprüche (z.B. eine
+        // geänderte Adresse) kommen zur Feld-für-Feld-Rückfrage.
         let importedEnsemble = 0;
         let importedTeam = 0;
-        
+        const konflikte = [];
+        const parseAdresse = (addr) => {
+          if (!addr) return { strasse: '', hausnummer: '', plz: '', ort: '' };
+          if (typeof addr === 'string') return { strasse: addr, hausnummer: '', plz: '', ort: '' };
+          return { strasse: addr.street || '', hausnummer: addr.number || '', plz: addr.zip || '', ort: addr.city || '' };
+        };
+        const mergeFeld = (kategorie, obj, feld, eingehendRaw, feldLabel, personLabel) => {
+          const eingehend = (eingehendRaw == null) ? '' : String(eingehendRaw);
+          const aktuell = (obj[feld] == null) ? '' : String(obj[feld]);
+          if (!eingehend || eingehend === aktuell) return;
+          if (!aktuell) { obj[feld] = eingehend; return; }
+          konflikte.push({ kategorie, id: obj.id, feld, feldLabel, personLabel, aktuell, eingehend });
+        };
+        const mergeAdresse = (kategorie, obj, addr, personLabel) => {
+          const inc = parseAdresse(addr);
+          const incStr = [inc.strasse, inc.hausnummer, inc.plz, inc.ort].filter(Boolean).join(' ').trim();
+          const curStr = ([obj.strasse, obj.hausnummer, obj.plz, obj.ort].filter(Boolean).join(' ').trim()) || (obj.adresse || '');
+          if (!incStr || incStr === curStr) return;
+          if (!curStr) { obj.strasse = inc.strasse; obj.hausnummer = inc.hausnummer; obj.plz = inc.plz; obj.ort = inc.ort; return; }
+          konflikte.push({ kategorie, id: obj.id, feld: 'adresse', feldLabel: 'Adresse', personLabel, aktuell: curStr, eingehend: incStr, adresseParts: inc });
+        };
+
         if (data.persons && data.persons.length > 0) {
-          const newEnsemble = [];
-          const newTeam = [];
-          
+          const ensembleList = (state.ensemble || []).slice();
+          const teamList = (state.team || []).slice();
+
           for (const person of data.persons) {
             if (person.category === 'ensemble') {
-              // Casting-Zuordnungen finden (Person → Figuren)
               const personCastings = (data.castings || []).filter(c => c.person_id === person.id);
-              const rolleIds = personCastings.map(c => {
-                // figure_id aus Exchange → gemappte ID im Regiebuch
-                return figurenIdMap[c.figure_id] || c.figure_id;
-              }).filter(Boolean);
-              
-              newEnsemble.push({
-                id: person.id || genId(),
-                name: person.name || 'Unbenannt',
-                email: person.email || '',
-                telefon: person.phone || '',
-                adresse: person.address || '',
-                notizen: person.notes || '',
-                rolleIds: rolleIds
-              });
-              importedEnsemble++;
+              const rolleIds = personCastings.map(c => figurenIdMap[c.figure_id] || c.figure_id).filter(Boolean);
+              let ex = person.id ? ensembleList.find(e => (e._ninaId && e._ninaId === person.id) || e.id === person.id) : null;
+              if (!ex) ex = ensembleList.find(e => !e._ninaId && (e.name || '').toLowerCase() === (person.name || '').toLowerCase());
+              if (ex) {
+                if (person.id && !ex._ninaId) ex._ninaId = person.id;
+                const label = ex.name || person.name || '';
+                mergeFeld('ensemble', ex, 'name', person.name, 'Name', label);
+                mergeFeld('ensemble', ex, 'email', person.email, 'E-Mail', label);
+                mergeFeld('ensemble', ex, 'telefon', person.phone, 'Telefon', label);
+                mergeAdresse('ensemble', ex, person.address, label);
+                if ((!ex.rolleIds || ex.rolleIds.length === 0) && rolleIds.length) ex.rolleIds = rolleIds;
+              } else {
+                const a = parseAdresse(person.address);
+                ensembleList.push({
+                  id: person.id || genId(), _ninaId: person.id || null,
+                  name: person.name || 'Unbenannt', email: person.email || '', telefon: person.phone || '',
+                  strasse: a.strasse, hausnummer: a.hausnummer, plz: a.plz, ort: a.ort,
+                  notizen: person.notes || '', rolleIds: rolleIds
+                });
+                importedEnsemble++;
+              }
             } else if (person.category === 'artistic_team') {
-              newTeam.push({
-                id: person.id || genId(),
-                name: person.name || 'Unbenannt',
-                funktion: person.function || person.role || '',
-                email: person.email || '',
-                telefon: person.phone || '',
-                adresse: person.address || '',
-                notizen: person.notes || ''
-              });
-              importedTeam++;
+              let ex = person.id ? teamList.find(e => (e._ninaId && e._ninaId === person.id) || e.id === person.id) : null;
+              if (!ex) ex = teamList.find(e => !e._ninaId && (e.name || '').toLowerCase() === (person.name || '').toLowerCase());
+              if (ex) {
+                if (person.id && !ex._ninaId) ex._ninaId = person.id;
+                const label = ex.name || person.name || '';
+                mergeFeld('team', ex, 'name', person.name, 'Name', label);
+                mergeFeld('team', ex, 'funktion', person.function || person.role, 'Funktion', label);
+                mergeFeld('team', ex, 'email', person.email, 'E-Mail', label);
+                mergeFeld('team', ex, 'telefon', person.phone, 'Telefon', label);
+                mergeAdresse('team', ex, person.address, label);
+              } else {
+                const a = parseAdresse(person.address);
+                teamList.push({
+                  id: person.id || genId(), _ninaId: person.id || null,
+                  name: person.name || 'Unbenannt', funktion: person.function || person.role || '',
+                  email: person.email || '', telefon: person.phone || '',
+                  strasse: a.strasse, hausnummer: a.hausnummer, plz: a.plz, ort: a.ort,
+                  notizen: person.notes || ''
+                });
+                importedTeam++;
+              }
             }
           }
-          
-          if (newEnsemble.length > 0) {
-            state.ensemble = newEnsemble;
-            save(KEYS.ensemble(projektId), state.ensemble);
-          }
-          if (newTeam.length > 0) {
-            state.team = newTeam;
-            save(KEYS.team(projektId), state.team);
-          }
+
+          state.ensemble = ensembleList;
+          save(KEYS.ensemble(projektId), state.ensemble);
+          state.team = teamList;
+          save(KEYS.team(projektId), state.team);
         }
         
         // === PROBEPLAN IMPORTIEREN ===
@@ -12804,15 +13163,106 @@ WICHTIGE REGELN:
         if (isCloudMode) {
           msg += '\n\n☁️ Daten wurden in die Cloud synchronisiert.';
         }
-        
+
+        if (konflikte.length > 0) {
+          msg += '\n\n⚠️ ' + konflikte.length + ' Unterschied(e) bei Personen gefunden – gleich kannst du Feld für Feld entscheiden, was übernommen wird.';
+        }
+
         alert(msg);
-        
+
         ninaImportData = null;
-        
+
+        if (konflikte.length > 0) {
+          state.pendingKonflikte = konflikte;
+          state.showKonfliktModal = true;
+          render();
+        }
+
       } catch (err) {
         console.error('NINA Import Fehler:', err);
         alert('❌ Import fehlgeschlagen: ' + err.message);
       }
+    }
+
+    // ============================================
+    // WIDERSPRUCHS-RÜCKFRAGE beim Personen-Abgleich (feldweise)
+    // ============================================
+    function renderKonfliktModal() {
+      const konflikte = state.pendingKonflikte || [];
+      const catLabel = { ensemble: 'Ensemble', team: 'Team' };
+      const groups = {};
+      konflikte.forEach((c, i) => {
+        const k = c.kategorie + '|' + c.id;
+        if (!groups[k]) groups[k] = { label: c.personLabel, cat: c.kategorie, items: [] };
+        groups[k].items.push({ c, i });
+      });
+      let rows = '';
+      Object.values(groups).forEach(g => {
+        rows += `<div class="border border-gray-200 rounded-lg p-3 mb-2"><div class="font-semibold text-sm mb-2">${catLabel[g.cat] || ''}: ${escapeHtml(g.label || '—')}</div>`;
+        g.items.forEach(({ c, i }) => {
+          rows += `<label class="flex items-start gap-2 py-1 text-sm" style="cursor:pointer;">
+            <input type="checkbox" data-idx="${i}" style="margin-top:4px;">
+            <span style="flex:1;"><span class="text-gray-500">${escapeHtml(c.feldLabel)}:</span>
+            <span style="text-decoration:line-through;color:#9ca3af;">${escapeHtml(c.aktuell)}</span>
+            <span class="text-gray-400">→</span>
+            <span style="color:#1d4ed8;font-weight:500;">${escapeHtml(c.eingehend)}</span></span>
+          </label>`;
+        });
+        rows += `</div>`;
+      });
+      return `
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showKonfliktModal')">
+          <div class="modal-content" style="max-width:640px;max-height:85vh;overflow-y:auto;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+              <h2 class="text-lg font-semibold">⚠️ Unterschiede beim Abgleich</h2>
+              <button class="text-gray-400 hover:text-gray-600" onclick="closeModal('showKonfliktModal')">✕</button>
+            </div>
+            <div class="modal-body">
+              <p class="text-sm text-gray-500 mb-3">Diese Angaben unterscheiden sich zwischen Rebu und dem Import aus Propla. Häkchen setzen bei allem, was du übernehmen willst – alles Übrige bleibt, wie es ist.</p>
+              <div class="mb-3"><button class="btn btn-outline btn-sm" onclick="toggleAllKonflikte()">Alle auswählen / abwählen</button></div>
+              ${rows}
+              <div class="flex justify-end gap-3 mt-4">
+                <button class="btn btn-outline" onclick="closeModal('showKonfliktModal')">Nichts ändern</button>
+                <button class="btn btn-primary" onclick="applyKonflikte()">Ausgewählte übernehmen</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function toggleAllKonflikte() {
+      const boxes = document.querySelectorAll('input[type="checkbox"][data-idx]');
+      const anyUnchecked = Array.from(boxes).some(b => !b.checked);
+      boxes.forEach(b => { b.checked = anyUnchecked; });
+    }
+
+    function applyKonflikte() {
+      const konflikte = state.pendingKonflikte || [];
+      const chosen = [];
+      document.querySelectorAll('input[type="checkbox"][data-idx]').forEach(b => {
+        if (b.checked) { const c = konflikte[parseInt(b.dataset.idx, 10)]; if (c) chosen.push(c); }
+      });
+      let touchedE = false, touchedT = false;
+      chosen.forEach(c => {
+        const list = c.kategorie === 'team' ? (state.team || []) : (state.ensemble || []);
+        const obj = list.find(o => o.id === c.id);
+        if (!obj) return;
+        if (c.feld === 'adresse' && c.adresseParts) {
+          obj.strasse = c.adresseParts.strasse; obj.hausnummer = c.adresseParts.hausnummer;
+          obj.plz = c.adresseParts.plz; obj.ort = c.adresseParts.ort;
+        } else {
+          obj[c.feld] = c.eingehend;
+        }
+        if (c.kategorie === 'team') touchedT = true; else touchedE = true;
+      });
+      if (touchedE) save(KEYS.ensemble(state.projektId), state.ensemble);
+      if (touchedT) save(KEYS.team(state.projektId), state.team);
+      const n = chosen.length;
+      state.showKonfliktModal = false;
+      state.pendingKonflikte = [];
+      render();
+      alert(n > 0 ? n + ' Änderung(en) übernommen.' : 'Nichts geändert.');
     }
     
     // Neue universelle Dokumenten-Handler-Funktion
@@ -16251,7 +16701,7 @@ ${chunkText}`;
               <!-- Notizen -->
               <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Notizen</label>
-                <input type="text" id="kostuem-notizen" value="${k.notizen || ''}" placeholder="Muss verstaubt aussehen">
+                <input type="text" id="kostuem-notizen" value="${k.notizen || ''}" placeholder="Muss verstaubt aussehen" autocomplete="off">
               </div>
               
               <div class="flex gap-2 mt-6">
@@ -16372,7 +16822,7 @@ ${chunkText}`;
               
               <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Notizen</label>
-                <input type="text" id="buehne-notizen" value="${b.notizen || ''}" placeholder="Zusätzliche Hinweise">
+                <input type="text" id="buehne-notizen" value="${b.notizen || ''}" placeholder="Zusätzliche Hinweise" autocomplete="off">
               </div>
               
               <div class="flex gap-2 mt-6">
@@ -16437,17 +16887,17 @@ ${chunkText}`;
               <div class="grid grid-cols-2 gap-4 mb-4">
                 <div>
                   <label class="block text-sm font-medium text-gray-700 mb-1">Name *</label>
-                  <input type="text" id="requisit-name" value="${r.name || ''}" placeholder="Weinglas">
+                  <input type="text" id="requisit-name" value="${r.name || ''}" placeholder="Weinglas" autocomplete="off">
                 </div>
                 <div>
                   <label class="block text-sm font-medium text-gray-700 mb-1">Zuständig</label>
-                  <input type="text" id="requisit-zustaendig" value="${r.zustaendig || ''}" placeholder="Name der zuständigen Person">
+                  <input type="text" id="requisit-zustaendig" value="${r.zustaendig || ''}" placeholder="Name der zuständigen Person" autocomplete="off">
                 </div>
               </div>
-              
+
               <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Beschreibung</label>
-                <textarea id="requisit-beschreibung" rows="2" placeholder="Kristallglas, muss zerbrechlich aussehen">${r.beschreibung || ''}</textarea>
+                <textarea id="requisit-beschreibung" rows="2" placeholder="Kristallglas, muss zerbrechlich aussehen" autocomplete="off">${r.beschreibung || ''}</textarea>
               </div>
               
               <!-- Szenen -->
@@ -16483,7 +16933,7 @@ ${chunkText}`;
               
               <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Notizen</label>
-                <input type="text" id="requisit-notizen" value="${r.notizen || ''}" placeholder="Zusätzliche Hinweise">
+                <input type="text" id="requisit-notizen" value="${r.notizen || ''}" placeholder="Zusätzliche Hinweise" autocomplete="off">
               </div>
               
               <div class="flex gap-2 mt-6">
@@ -16695,6 +17145,7 @@ ${chunkText}`;
       state.editingSzene = null;
       state.editingKostuem = null;
       state.editingMedium = null;
+      state.editingPerson = null;
       if (modalName === 'showProjektModal') {
         editingProjekt = null;
         pendingTitelbild = null;
