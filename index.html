@@ -8038,6 +8038,7 @@ WICHTIGE REGELN:
           { id: 'uebersichten', icon: '📊', label: 'Übersichten' },
           { id: 'fassungen', icon: '📚', label: 'Fassungen' },
           { id: 'teamproben', icon: '👥', label: 'Team & Proben' },
+          { id: 'hilfe', icon: '❓', label: 'Hilfe & Anleitung', action: "openModal('showHelpModal')" },
         ]},
       ];
       
@@ -8150,8 +8151,8 @@ WICHTIGE REGELN:
                 <div class="nav-item ${state.currentView === item.id ? 'active' : ''} px-3 py-2 flex items-center gap-2"
                      role="button" tabindex="0"
                      aria-current="${state.currentView === item.id ? 'page' : 'false'}"
-                     onclick="navigateTo('${item.id}')"
-                     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();navigateTo('${item.id}')}">
+                     onclick="${item.action ? item.action : `navigateTo('${item.id}')`}"
+                     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${item.action ? item.action : `navigateTo('${item.id}')`}}">
                   <span aria-hidden="true">${item.icon}</span>
                   <span class="text-sm">${item.label}</span>
                 </div>
