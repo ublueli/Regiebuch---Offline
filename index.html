@@ -581,6 +581,10 @@
     .cue-inline-marker.cue-lx { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; }
     .cue-inline-marker.cue-q { background: #dbeafe; color: #1e40af; border: 1px solid #3b82f6; }
     .cue-inline-marker.cue-v { background: #ede9fe; color: #5b21b6; border: 1px solid #8b5cf6; }
+    .cue-inline-marker.cue-r { background: #fce7f3; color: #9d174d; border: 1px solid #ec4899; }
+    .cue-inline-marker.cue-k { background: #dcfce7; color: #166534; border: 1px solid #22c55e; }
+    .cue-inline-marker.cue-b { background: #ffedd5; color: #9a3412; border: 1px solid #f97316; }
+    .cue-inline-marker.cue-u { background: #fed7aa; color: #9a3412; border: 1px solid #fb923c; }
     .cue-inline-marker:hover { transform: scale(1.05); }
     
     /* ============================================ */
@@ -2366,6 +2370,8 @@
       q: { name: 'Ton', prefix: 'Q', class: 'cue-q', icon: '🔊' },
       v: { name: 'Video', prefix: 'V', class: 'cue-v', icon: '📺' },
       r: { name: 'Requisite', prefix: 'R', class: 'cue-r', icon: '🎭' },
+      k: { name: 'Kostüm', prefix: 'K', class: 'cue-k', icon: '👗' },
+      b: { name: 'Bühne', prefix: 'B', class: 'cue-b', icon: '🎪' },
       u: { name: 'Umbau', prefix: 'U', class: 'cue-u', icon: '🔄' },
     };
     
@@ -6855,10 +6861,25 @@ was morgen kommt – wer ist dabei?</p>
         if (index !== -1) {
           const endIndex = index + anker.length;
           enrichedText = enrichedText.substring(0, endIndex) + marker + enrichedText.substring(endIndex);
+        } else if (anker.trim().length >= 6) {
+          // Fallback: Whitespace-tolerante Suche (Text im Textbuch ist HTML,
+          // der KI-Anker reiner Text – Zeilenumbrüche/Abstände können abweichen).
+          try {
+            const pattern = anker.trim().split(/\s+/).map(_escapeRegExp).join('\\s+');
+            const m = new RegExp(pattern).exec(enrichedText);
+            if (m) {
+              const endIndex = m.index + m[0].length;
+              enrichedText = enrichedText.substring(0, endIndex) + marker + enrichedText.substring(endIndex);
+            }
+          } catch (e) { /* ungültiges Muster – überspringen */ }
         }
       });
-      
+
       return enrichedText;
+    }
+
+    function _escapeRegExp(s) {
+      return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     // Debounced-Variante für den input-Handler: verhindert, dass bei jedem
@@ -9307,6 +9328,8 @@ ${text}`;
         (Array.isArray(json.cues) ? json.cues : []).forEach(x => flat.push({ kat: 'cue', typ: (['lx', 'q', 'v'].includes(x.typ) ? x.typ : 'lx'), beschreibung: x.beschreibung || '', anker: x.ankerText || '' }));
 
         state.szeneKiVorschlaege = { szeneId: szeneId, flat: flat };
+        state.szeneKiWizard = { szeneId: szeneId, items: flat, index: 0, angenommen: 0, abgelehnt: 0 };
+        state.kiWizardActive = false;
         state.szeneKiLoading = null;
         state.showSzeneKiModal = true;
         render();
@@ -9326,57 +9349,78 @@ ${text}`;
       return false;
     }
 
+    // Sequenzieller KI-Assistent: ein Vorschlag nach dem anderen.
+    // Ablehnen → nächster Vorschlag. Annehmen → Definitionsfenster (neu anlegen
+    // oder bestehenden Eintrag wählen), danach Marker im Textbuch, dann weiter.
     function renderSzeneKiModal() {
-      const v = state.szeneKiVorschlaege;
-      if (!v) return '';
-      const szene = state.szenen.find(s => s.id === v.szeneId);
-      const cueTypLabel = { lx: '💡 Licht', q: '🔊 Ton/Musik', v: '🎬 Video' };
-      const katLabel = { requisit: '🎭 Requisiten', kostuem: '👗 Kostüme', buehne: '🎪 Bühnenbild', cue: '💡 Cues (Licht/Ton/Video)' };
-      const reihenfolge = ['requisit', 'kostuem', 'buehne', 'cue'];
+      const w = state.szeneKiWizard;
+      if (!w) return '';
+      const szene = state.szenen.find(s => s.id === w.szeneId);
+      const total = w.items.length;
+      const kopf = `🔎 KI-Analyse${szene ? ' · Szene ' + escapeHtml(szene.nummer) : ''}`;
 
-      let bodyHtml = '';
-      let anzahl = 0;
-      reihenfolge.forEach(kat => {
-        const items = v.flat.map((it, i) => ({ it, i })).filter(x => x.it.kat === kat);
-        if (items.length === 0) return;
-        bodyHtml += `<div class="mb-4"><div class="font-semibold text-sm mb-1">${katLabel[kat]}</div>`;
-        items.forEach(({ it, i }) => {
-          anzahl++;
-          const exists = _kiItemExists(it, v.szeneId);
-          const titel = it.kat === 'cue' ? (cueTypLabel[it.typ] + ': ' + (it.beschreibung || '')) : it.name;
-          const sub = it.kat === 'kostuem' && it.figur ? ('Figur: ' + it.figur) : (it.kat !== 'cue' ? it.beschreibung : '');
-          bodyHtml += `
-            <label class="flex items-start gap-2 py-1.5 border-b border-gray-50 text-sm" style="cursor:pointer;${exists ? 'opacity:0.55;' : ''}">
-              <input type="checkbox" data-ki-idx="${i}" ${exists ? '' : 'checked'} style="margin-top:4px;">
-              <span style="flex:1;">
-                <span class="font-medium">${escapeHtml(titel || '—')}</span>
-                ${sub ? ` <span class="text-gray-500">– ${escapeHtml(sub)}</span>` : ''}
-                ${exists ? ' <span class="text-xs text-gray-400">(schon vorhanden)</span>' : ''}
-                ${it.anker ? `<div class="text-xs text-gray-400 italic mt-0.5">„${escapeHtml(it.anker)}“</div>` : ''}
-              </span>
-            </label>`;
-        });
-        bodyHtml += `</div>`;
-      });
-
-      if (anzahl === 0) {
-        bodyHtml = '<div class="text-center text-gray-400 py-8">Die KI hat in dieser Szene nichts Konkretes gefunden.</div>';
+      // Fertig oder nichts gefunden → Abschlusskarte
+      if (total === 0 || w.index >= total) {
+        const bilanz = total === 0
+          ? 'Die KI hat in dieser Szene nichts Konkretes gefunden.'
+          : `Durchgesehen: ${total} Vorschl${total === 1 ? 'ag' : 'äge'}. Übernommen: ${w.angenommen || 0}, abgelehnt: ${w.abgelehnt || 0}.`;
+        return `
+          <div class="modal-overlay" role="dialog" aria-modal="true" onclick="szeneKiFinish()">
+            <div class="modal-content" style="max-width:520px;" onclick="event.stopPropagation()">
+              <div class="modal-header">
+                <h2 class="text-lg font-semibold">${kopf}</h2>
+                <button class="text-gray-400 hover:text-gray-600" onclick="szeneKiFinish()">✕</button>
+              </div>
+              <div class="modal-body">
+                <div class="text-center py-6">
+                  <div class="text-4xl mb-3">✅</div>
+                  <p class="text-sm text-gray-600">${bilanz}</p>
+                  ${total > 0 && (w.angenommen || 0) > 0 ? '<p class="text-xs text-gray-400 mt-2">Die Marker erscheinen im Textbuch in der Ansicht «Szene · Technik» an der jeweiligen Textstelle.</p>' : ''}
+                </div>
+                <div class="flex justify-end mt-2">
+                  <button class="btn btn-primary" onclick="szeneKiFinish()">Fertig</button>
+                </div>
+              </div>
+            </div>
+          </div>`;
       }
 
+      const it = w.items[w.index];
+      const katLabel = { requisit: '🎭 Requisit', kostuem: '👗 Kostüm', buehne: '🎪 Bühnenbild', cue: 'Cue' };
+      const cueTypLabel = { lx: '💡 Licht (LX)', q: '🔊 Ton / Audio (Q)', v: '📺 Video (V)' };
+      const badge = it.kat === 'cue' ? (cueTypLabel[it.typ] || 'Cue') : katLabel[it.kat];
+      const titel = it.kat === 'cue' ? (it.beschreibung || cueTypLabel[it.typ] || 'Cue') : (it.name || '—');
+      const exists = _kiItemExists(it, w.szeneId);
+      const figurHinweis = it.kat === 'kostuem' && it.figur ? `<div class="text-sm text-gray-500 mt-1">Figur: ${escapeHtml(it.figur)}</div>` : '';
+      const beschr = (it.kat !== 'cue' && it.beschreibung) ? `<div class="text-sm text-gray-500 mt-1">${escapeHtml(it.beschreibung)}</div>` : '';
+
       return `
-        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showSzeneKiModal')">
-          <div class="modal-content" style="max-width:620px;max-height:85vh;overflow-y:auto;" onclick="event.stopPropagation()">
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+          <div class="modal-content" style="max-width:520px;" onclick="event.stopPropagation()">
             <div class="modal-header">
-              <h2 class="text-lg font-semibold">🔎 KI-Analyse${szene ? ' · Szene ' + escapeHtml(szene.nummer) : ''}</h2>
-              <button class="text-gray-400 hover:text-gray-600" onclick="closeModal('showSzeneKiModal')">✕</button>
+              <h2 class="text-lg font-semibold">${kopf}</h2>
+              <button class="text-gray-400 hover:text-gray-600" onclick="szeneKiFinish()" title="Assistent beenden">✕</button>
             </div>
             <div class="modal-body">
-              <p class="text-sm text-gray-500 mb-3">Vorschläge aus dem Szenentext. Häkchen setzen bei allem, was du übernehmen willst – erst dann werden die Einträge angelegt und mit dieser Szene verknüpft.</p>
-              ${anzahl > 0 ? '<div class="mb-2"><button class="btn btn-outline btn-xs" onclick="toggleAllSzeneKi()">Alle auswählen / abwählen</button></div>' : ''}
-              ${bodyHtml}
-              <div class="flex justify-end gap-2 mt-4">
-                <button class="btn btn-outline" onclick="closeModal('showSzeneKiModal')">Schliessen</button>
-                ${anzahl > 0 ? '<button class="btn btn-primary" onclick="applySzeneKiVorschlaege()">Ausgewählte übernehmen</button>' : ''}
+              <div class="flex items-center justify-between mb-3">
+                <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">Vorschlag ${w.index + 1} von ${total}</span>
+                <span class="text-xs text-gray-400">✓ ${w.angenommen || 0} · ✕ ${w.abgelehnt || 0}</span>
+              </div>
+              <div class="rounded-lg border border-gray-200 p-4" style="background:#faf9ff;">
+                <div class="text-xs font-semibold text-purple-600 mb-1">${badge}</div>
+                <div class="text-base font-semibold text-gray-800">${escapeHtml(titel)}</div>
+                ${figurHinweis}
+                ${beschr}
+                ${exists ? '<div class="text-xs text-amber-600 mt-2">↺ Etwas Ähnliches gibt es in dieser Szene schon – beim Annehmen kannst du den bestehenden Eintrag wählen.</div>' : ''}
+                ${it.anker ? `<div class="text-xs text-gray-400 italic mt-3 pt-2 border-t border-gray-100">🔍 Textstelle: „${escapeHtml(it.anker)}“</div>` : ''}
+              </div>
+              <p class="text-xs text-gray-400 mt-3">Beim Annehmen öffnet sich ein Fenster zum Definieren (oder um einen bestehenden Eintrag zu wählen). Danach wird der Marker im Textbuch gesetzt.</p>
+              <div class="flex gap-2 mt-4">
+                <button class="btn btn-outline flex-1" onclick="szeneKiReject()">✕ Ablehnen</button>
+                <button class="btn btn-primary flex-1" onclick="szeneKiAccept()">✓ Annehmen &amp; definieren</button>
+              </div>
+              <div class="text-center mt-2">
+                <button class="btn btn-xs" style="color:#9ca3af;background:none;" onclick="szeneKiFinish()">Assistent beenden</button>
               </div>
             </div>
           </div>
@@ -9384,44 +9428,71 @@ ${text}`;
       `;
     }
 
-    function toggleAllSzeneKi() {
-      const boxes = document.querySelectorAll('input[data-ki-idx]');
-      const anyUnchecked = Array.from(boxes).some(b => !b.checked);
-      boxes.forEach(b => { b.checked = anyUnchecked; });
+    function szeneKiFinish() {
+      state.showSzeneKiModal = false;
+      state.szeneKiWizard = null;
+      state.szeneKiVorschlaege = null;
+      state.kiWizardActive = false;
+      render();
     }
 
-    function applySzeneKiVorschlaege() {
-      const v = state.szeneKiVorschlaege;
-      if (!v) return;
-      const szeneId = v.szeneId;
-      const checked = new Set();
-      document.querySelectorAll('input[data-ki-idx]').forEach(b => { if (b.checked) checked.add(parseInt(b.dataset.kiIdx, 10)); });
-      let addR = 0, addK = 0, addB = 0, addC = 0;
-      v.flat.forEach((it, i) => {
-        if (!checked.has(i) || _kiItemExists(it, szeneId)) return;
-        if (it.kat === 'requisit') {
-          state.requisiten.push({ id: genId(), name: it.name || 'Requisit', zustaendig: '', beschreibung: it.beschreibung || '', szenen: [szeneId], bilder: [], notizen: '', erstelltVonKI: true });
-          addR++;
-        } else if (it.kat === 'kostuem') {
-          let figurId = '';
-          if (it.figur) { const f = state.figuren.find(f => (f.name || '').toLowerCase() === (it.figur || '').toLowerCase()); if (f) figurId = f.id; }
-          state.kostueme.push({ id: genId(), name: it.name || 'Kostüm', figur: figurId, beschreibung: it.beschreibung || '', maske: '', szenen: [szeneId], notizen: '', kostuemBilder: [], maskeBilder: [], erstelltVonKI: true });
-          addK++;
-        } else if (it.kat === 'buehne') {
-          state.buehne.push({ id: genId(), name: it.name || 'Element', kategorie: 'Sonstiges', beschreibung: it.beschreibung || '', bilder: [], notizen: '', szenen: [szeneId], erstelltVonKI: true });
-          addB++;
-        } else if (it.kat === 'cue') {
-          const typ = it.typ || 'lx';
-          const nummer = state.cues.filter(c => c.typ === typ).reduce((m, c) => Math.max(m, c.nummer || 0), 0) + 1;
-          state.cues.push({ id: genId(), typ: typ, nummer: nummer, szeneId: szeneId, beschreibung: it.beschreibung || '', ankerText: it.anker || '', dauer: '', erstelltVonKI: true });
-          addC++;
-        }
-      });
-      saveProjektDaten();
-      state.showSzeneKiModal = false;
-      state.szeneKiVorschlaege = null;
+    function szeneKiReject() {
+      const w = state.szeneKiWizard;
+      if (!w) return;
+      w.abgelehnt = (w.abgelehnt || 0) + 1;
+      w.index++;
       render();
-      alert('Übernommen: ' + addR + ' Requisiten, ' + addK + ' Kostüme, ' + addB + ' Bühnenbild, ' + addC + ' Cues.');
+    }
+
+    // Wizard nach einem Cue-Speichern/Abbrechen wieder anzeigen (oder Abschluss).
+    function kiWizardShowOrFinish() {
+      if (!state.szeneKiWizard) { state.showSzeneKiModal = false; render(); return; }
+      state.showSzeneKiModal = true;
+      render();
+    }
+
+    function szeneKiAccept() {
+      const w = state.szeneKiWizard;
+      if (!w) return;
+      const it = w.items[w.index];
+      if (!it) return;
+      const gl = (a, b) => (a || '').toLowerCase() === (b || '').toLowerCase();
+      const pre = { szeneId: w.szeneId, ankerText: it.anker || '', beschreibung: it.beschreibung || '', nummer: '' };
+
+      if (it.kat === 'requisit') {
+        pre.typ = 'r';
+        const exist = state.requisiten.find(r => gl(r.name, it.name));
+        if (exist) pre.requisitenId = exist.id; else pre.requisitenName = it.name || '';
+      } else if (it.kat === 'kostuem') {
+        pre.typ = 'k';
+        const exist = state.kostueme.find(k => gl(k.name, it.name));
+        if (exist) { pre.kostuemId = exist.id; }
+        else {
+          pre.kostuemName = it.name || '';
+          if (it.figur) { const f = state.figuren.find(f => gl(f.name, it.figur)); if (f) pre.kostuemFigurId = f.id; }
+        }
+      } else if (it.kat === 'buehne') {
+        pre.typ = 'b';
+        const exist = state.buehne.find(b => gl(b.name, it.name));
+        if (exist) pre.buehneId = exist.id; else pre.buehneName = it.name || '';
+      } else {
+        pre.typ = it.typ || 'lx';
+        if (pre.typ === 'q' || pre.typ === 'v') {
+          const wunsch = it.beschreibung || it.name || '';
+          const exist = state.medien.find(m => (pre.typ === 'q' ? m.type === 'audio' : m.type === 'video') && gl(m.name, wunsch));
+          if (exist) pre.mediumId = exist.id; else pre.mediumGeplant = wunsch;
+        }
+      }
+
+      // Nächste freie Cue-Nummer für diesen Typ vorschlagen
+      pre.nummer = state.cues.filter(c => c.typ === pre.typ).reduce((m, c) => Math.max(m, c.nummer || 0), 0) + 1;
+
+      state.editingCue = pre;
+      state.kiWizardActive = true;
+      state.showSzeneKiModal = false;
+      state.showCueModal = true;
+      render();
+      setTimeout(updateCueModalForTyp, 50);
     }
 
     // ============================================
@@ -9554,6 +9625,7 @@ ${text}`;
             <div class="flex justify-between items-center mb-4">
               <h2 class="text-lg font-semibold">Cue-Listen (${state.cues.length} Cues)</h2>
               <div class="flex gap-2">
+                <button class="btn btn-outline" onclick="cuesNeuNummerieren()" title="Licht- und Ton-Cues durchlaufend nach ihrer Reihenfolge im Stück nummerieren">🔢 Cues neu nummerieren</button>
                 <button class="btn btn-outline" onclick="openCueExportDialog()">📄 Export</button>
                 <button class="btn btn-primary" onclick="openCueModal()">+ Neuer Cue</button>
               </div>
@@ -11627,11 +11699,12 @@ ${text}`;
           );
           // ==================================
         }
-        
+
+        renumberCuesInOrder(['lx', 'q']);
         saveProjektDaten();
       }
     }
-    
+
     function reloadLocalFile(mediumId) {
       const input = document.createElement('input');
       input.type = 'file';
@@ -16553,7 +16626,7 @@ ${chunkText}`;
                 </div>
                 <div>
                   <label class="block text-sm font-medium text-gray-700 mb-1">Nummer</label>
-                  <input type="number" id="cue-nummer" value="${c.nummer || ''}" min="1">
+                  <input type="number" id="cue-nummer" value="${c.nummer || (isEdit ? '' : cueNummerFuerPosition(selectedTyp, c.szeneId, c.ankerText, c.id))}" min="1">
                 </div>
               </div>
               
@@ -16566,10 +16639,44 @@ ${chunkText}`;
                     <option value="${r.id}" ${c.requisitenId === r.id ? 'selected' : ''}>${r.name}</option>
                   `).join('')}
                 </select>
-                <input type="text" id="cue-requisite-neu" class="mt-2 ${c.requisitenId ? 'hidden' : ''}" 
+                <input type="text" id="cue-requisite-neu" class="mt-2 ${c.requisitenId ? 'hidden' : ''}"
                        placeholder="Name der neuen Requisite" value="${c.requisitenName || ''}">
               </div>
-              
+
+              <!-- Verknüpfung für Kostüm -->
+              <div id="cue-kostuem-section" class="mt-4 ${selectedTyp === 'k' ? '' : 'hidden'}">
+                <label class="block text-sm font-medium text-gray-700 mb-1">👗 Kostüm verknüpfen</label>
+                <select id="cue-kostuem" onchange="toggleCueKostuemNeu()">
+                  <option value="">– Neues Kostüm erstellen –</option>
+                  ${state.kostueme.map(k => `
+                    <option value="${k.id}" ${c.kostuemId === k.id ? 'selected' : ''}>${escapeHtml(k.name)}</option>
+                  `).join('')}
+                </select>
+                <div id="cue-kostuem-neu-wrap" class="${c.kostuemId ? 'hidden' : ''}">
+                  <input type="text" id="cue-kostuem-neu" class="mt-2"
+                         placeholder="Name des neuen Kostüms" value="${escapeHtml(c.kostuemName || '')}">
+                  <select id="cue-kostuem-figur" class="mt-2">
+                    <option value="">– Figur zuordnen (optional) –</option>
+                    ${state.figuren.map(f => `
+                      <option value="${f.id}" ${c.kostuemFigurId === f.id ? 'selected' : ''}>${escapeHtml(f.name)}</option>
+                    `).join('')}
+                  </select>
+                </div>
+              </div>
+
+              <!-- Verknüpfung für Bühnenbild -->
+              <div id="cue-buehne-section" class="mt-4 ${selectedTyp === 'b' ? '' : 'hidden'}">
+                <label class="block text-sm font-medium text-gray-700 mb-1">🎪 Bühnenbild verknüpfen</label>
+                <select id="cue-buehne" onchange="toggleCueBuehneNeu()">
+                  <option value="">– Neues Element erstellen –</option>
+                  ${state.buehne.map(b => `
+                    <option value="${b.id}" ${c.buehneId === b.id ? 'selected' : ''}>${escapeHtml(b.name)}</option>
+                  `).join('')}
+                </select>
+                <input type="text" id="cue-buehne-neu" class="mt-2 ${c.buehneId ? 'hidden' : ''}"
+                       placeholder="Name des neuen Bühnenbild-Elements" value="${escapeHtml(c.buehneName || '')}">
+              </div>
+
               <!-- Verknüpfung für Ton/Video -->
               <div id="cue-medium-section" class="mt-4 ${(selectedTyp === 'q' || selectedTyp === 'v') ? '' : 'hidden'}">
                 <label class="block text-sm font-medium text-gray-700 mb-1" id="cue-medium-label">
@@ -16736,6 +16843,22 @@ ${chunkText}`;
         neu.classList.toggle('hidden', select.value !== '');
       }
     }
+
+    function toggleCueKostuemNeu() {
+      const select = document.getElementById('cue-kostuem');
+      const neu = document.getElementById('cue-kostuem-neu-wrap');
+      if (select && neu) {
+        neu.classList.toggle('hidden', select.value !== '');
+      }
+    }
+
+    function toggleCueBuehneNeu() {
+      const select = document.getElementById('cue-buehne');
+      const neu = document.getElementById('cue-buehne-neu');
+      if (select && neu) {
+        neu.classList.toggle('hidden', select.value !== '');
+      }
+    }
     
     // UI-Update wenn Cue-Typ geändert wird
     function updateCueModalForTyp() {
@@ -16750,7 +16873,29 @@ ${chunkText}`;
       if (reqSection) {
         reqSection.classList.toggle('hidden', typ !== 'r');
       }
-      
+
+      // Nummer bei einem NEUEN Cue automatisch zur Reihenfolge im Stück setzen
+      // (Feld bleibt editierbar – der Wert wird nur vorgeschlagen).
+      const nummerInput = document.getElementById('cue-nummer');
+      const istNeu = !(state.editingCue && state.editingCue.id && state.cues.find(c => c.id === state.editingCue.id));
+      if (nummerInput && istNeu) {
+        const szeneId = document.getElementById('cue-szene')?.value || state.editingCue?.szeneId;
+        const ankerText = document.getElementById('cue-ankertext')?.value || state.editingCue?.ankerText;
+        nummerInput.value = cueNummerFuerPosition(typ, szeneId, ankerText, null);
+      }
+
+      // Kostüm-Sektion
+      const kostuemSection = document.getElementById('cue-kostuem-section');
+      if (kostuemSection) {
+        kostuemSection.classList.toggle('hidden', typ !== 'k');
+      }
+
+      // Bühnenbild-Sektion
+      const buehneSection = document.getElementById('cue-buehne-section');
+      if (buehneSection) {
+        buehneSection.classList.toggle('hidden', typ !== 'b');
+      }
+
       // Medium-Sektion (Ton oder Video)
       if (medSection) {
         medSection.classList.toggle('hidden', typ !== 'q' && typ !== 'v');
@@ -17381,6 +17526,14 @@ ${chunkText}`;
     }
 
     function closeModal(modalName) {
+      // Cue-Fenster aus dem KI-Assistenten abgebrochen → zurück zum selben Vorschlag
+      if (modalName === 'showCueModal' && state.kiWizardActive) {
+        state.kiWizardActive = false;
+        state.showCueModal = false;
+        state.editingCue = null;
+        kiWizardShowOrFinish();
+        return;
+      }
       state[modalName] = false;
       state.editingFigur = null;
       state.editingCue = null;
@@ -17388,7 +17541,7 @@ ${chunkText}`;
       state.editingKostuem = null;
       state.editingMedium = null;
       state.editingPerson = null;
-      if (modalName === 'showSzeneKiModal') state.szeneKiVorschlaege = null;
+      if (modalName === 'showSzeneKiModal') { state.szeneKiVorschlaege = null; state.szeneKiWizard = null; }
       if (modalName === 'showProjektModal') {
         editingProjekt = null;
         pendingTitelbild = null;
@@ -17535,6 +17688,63 @@ ${chunkText}`;
       render();
     }
 
+    // Nummeriert Cues eines Typs durchlaufend in der Reihenfolge, in der sie im
+    // Stück vorkommen: erst nach Szenenreihenfolge, dann nach Position der
+    // Textstelle (Anker) innerhalb der Szene. Standardmässig Licht und Ton.
+    function renumberCuesInOrder(typen = ['lx', 'q']) {
+      const szeneOrder = {};
+      state.szenen.forEach((s, i) => { szeneOrder[s.id] = i; });
+      typen.forEach(typ => {
+        const eintraege = state.cues.filter(c => c.typ === typ).map(c => {
+          const si = (c.szeneId != null && c.szeneId in szeneOrder) ? szeneOrder[c.szeneId] : 99999;
+          let pos = Number.MAX_SAFE_INTEGER;
+          if (c.ankerText && c.szeneId) {
+            const plain = (state.textbuch[c.szeneId] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            const ank = c.ankerText.replace(/\s+/g, ' ').trim();
+            const idx = plain.indexOf(ank);
+            if (idx !== -1) pos = idx;
+          }
+          return { c, si, pos, alt: c.nummer || 0 };
+        });
+        // Nach Szene, dann Textposition, dann bisheriger Nummer (stabil)
+        eintraege.sort((a, b) => a.si - b.si || a.pos - b.pos || a.alt - b.alt);
+        eintraege.forEach((e, i) => { e.c.nummer = i + 1; });
+      });
+    }
+
+    // Knopf in den Cue-Listen: Licht und Ton neu durchnummerieren (z.B. nach
+    // dem Umstellen von Szenen).
+    function cuesNeuNummerieren() {
+      renumberCuesInOrder(['lx', 'q']);
+      saveProjektDaten();
+      render();
+    }
+
+    // Position eines (neuen) Cues in der Reihenfolge des Stücks: zählt, wie viele
+    // Cues desselben Typs vor dieser Szene/Textstelle liegen, +1.
+    function cueNummerFuerPosition(typ, szeneId, ankerText, ignoreId) {
+      const szeneOrder = {};
+      state.szenen.forEach((s, i) => { szeneOrder[s.id] = i; });
+      const posOf = (sid, ank) => {
+        const si = (sid != null && sid in szeneOrder) ? szeneOrder[sid] : 99999;
+        let pos = Number.MAX_SAFE_INTEGER;
+        if (ank && sid) {
+          const plain = (state.textbuch[sid] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          const a = ank.replace(/\s+/g, ' ').trim();
+          const idx = plain.indexOf(a);
+          if (idx !== -1) pos = idx;
+        }
+        return { si, pos };
+      };
+      const mein = posOf(szeneId, ankerText);
+      let vorher = 0;
+      state.cues.filter(c => c.typ === typ && c.id !== ignoreId).forEach(c => {
+        const p = posOf(c.szeneId, c.ankerText);
+        if (p.si < mein.si || (p.si === mein.si && p.pos < mein.pos)) vorher++;
+      });
+      return vorher + 1;
+    }
+
     function saveCue() {
       const typ = document.getElementById('cue-typ').value;
       const nummer = parseInt(document.getElementById('cue-nummer').value) || 1;
@@ -17543,7 +17753,10 @@ ${chunkText}`;
       let requisitenId = null;
       let mediumId = null;
       let mediumGeplant = null;
-      
+      let kostuemId = null;
+      let buehneId = null;
+      const cueBeschreibung = document.getElementById('cue-beschreibung')?.value.trim() || '';
+
       // Bei Requisiten-Cue: Verknüpfung oder neue Requisite
       if (typ === 'r') {
         const reqSelect = document.getElementById('cue-requisite');
@@ -17565,7 +17778,7 @@ ${chunkText}`;
           const neueRequisite = {
             id: genId(),
             name: reqNeu.value.trim(),
-            beschreibung: '',
+            beschreibung: cueBeschreibung,
             zustaendig: '',
             szenen: szeneId ? [szeneId] : [],
             bilder: [],
@@ -17574,6 +17787,61 @@ ${chunkText}`;
           };
           state.requisiten.push(neueRequisite);
           requisitenId = neueRequisite.id;
+        }
+      }
+
+      // Bei Kostüm-Cue: Verknüpfung oder neues Kostüm
+      if (typ === 'k') {
+        const kSelect = document.getElementById('cue-kostuem');
+        const kNeu = document.getElementById('cue-kostuem-neu');
+        if (kSelect?.value) {
+          kostuemId = kSelect.value;
+          if (szeneId) {
+            const k = state.kostueme.find(x => x.id === kostuemId);
+            if (k) { if (!k.szenen) k.szenen = []; if (!k.szenen.includes(szeneId)) k.szenen.push(szeneId); }
+          }
+        } else if (kNeu?.value.trim()) {
+          const figurId = document.getElementById('cue-kostuem-figur')?.value || '';
+          const neuesKostuem = {
+            id: genId(),
+            name: kNeu.value.trim(),
+            figur: figurId,
+            beschreibung: cueBeschreibung,
+            maske: '',
+            szenen: szeneId ? [szeneId] : [],
+            notizen: '',
+            kostuemBilder: [],
+            maskeBilder: [],
+            erstelltVonCue: true
+          };
+          state.kostueme.push(neuesKostuem);
+          kostuemId = neuesKostuem.id;
+        }
+      }
+
+      // Bei Bühnen-Cue: Verknüpfung oder neues Element
+      if (typ === 'b') {
+        const bSelect = document.getElementById('cue-buehne');
+        const bNeu = document.getElementById('cue-buehne-neu');
+        if (bSelect?.value) {
+          buehneId = bSelect.value;
+          if (szeneId) {
+            const b = state.buehne.find(x => x.id === buehneId);
+            if (b) { if (!b.szenen) b.szenen = []; if (!b.szenen.includes(szeneId)) b.szenen.push(szeneId); }
+          }
+        } else if (bNeu?.value.trim()) {
+          const neuesElement = {
+            id: genId(),
+            name: bNeu.value.trim(),
+            kategorie: 'Sonstiges',
+            beschreibung: cueBeschreibung,
+            bilder: [],
+            notizen: '',
+            szenen: szeneId ? [szeneId] : [],
+            erstelltVonCue: true
+          };
+          state.buehne.push(neuesElement);
+          buehneId = neuesElement.id;
         }
       }
       
@@ -17608,6 +17876,8 @@ ${chunkText}`;
         dauer: document.getElementById('cue-dauer')?.value.trim() || '',
         ankerText: document.getElementById('cue-ankertext')?.value.trim() || '', // NEU
         requisitenId,
+        kostuemId,
+        buehneId,
         mediumId,
         mediumGeplant,
       };
@@ -17645,8 +17915,26 @@ ${chunkText}`;
         // Create
         state.cues.push({ id: genId(), ...data });
       }
-      
+
+      // Licht- und Ton-Cues durchlaufend nach Reihenfolge im Stück nummerieren
+      renumberCuesInOrder(['lx', 'q']);
+
       saveProjektDaten();
+
+      // Aus dem KI-Assistenten heraus geöffnet? Dann nicht einfach schliessen,
+      // sondern zum nächsten Vorschlag weitergehen.
+      if (state.kiWizardActive) {
+        state.kiWizardActive = false;
+        state.showCueModal = false;
+        state.editingCue = null;
+        if (state.szeneKiWizard) {
+          state.szeneKiWizard.angenommen = (state.szeneKiWizard.angenommen || 0) + 1;
+          state.szeneKiWizard.index++;
+        }
+        kiWizardShowOrFinish();
+        return;
+      }
+
       closeModal('showCueModal');
     }
 
@@ -17672,6 +17960,7 @@ ${chunkText}`;
       }
       
       state.cues = state.cues.filter(c => c.id !== cueId);
+      renumberCuesInOrder(['lx', 'q']);
       saveProjektDaten();
       closeModal('showCueModal');
     }
