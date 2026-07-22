@@ -4125,7 +4125,7 @@ was morgen kommt – wer ist dabei?</p>
       overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:20000;display:flex;align-items:center;justify-content:center;';
       var dialog = document.createElement('div');
       dialog.style.cssText = 'background:white;border-radius:12px;padding:1.5rem;max-width:450px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3);';
-      var timeStr = new Date(savedTime).toLocaleString('de-DE');
+      var timeStr = new Date(savedTime).toLocaleString('de-CH');
       dialog.innerHTML = '<h3 style="margin:0 0 1rem;font-size:1.1rem;">\u{1F504} Ungespeicherte \u00c4nderungen gefunden</h3>' +
         '<p style="color:#555;font-size:0.9rem;">Im Browser wurden \u00c4nderungen vom <strong>' + timeStr + '</strong> gefunden, die m\u00f6glicherweise nicht gesichert wurden.</p>' +
         '<p style="color:#555;font-size:0.85rem;margin-top:0.5rem;">Die Daten sind bereits geladen. M\u00f6chtest du sie jetzt als Datei sichern?</p>' +
@@ -4249,7 +4249,7 @@ was morgen kommt – wer ist dabei?</p>
       var url = URL.createObjectURL(content);
       var a = document.createElement('a');
       a.href = url;
-      a.download = 'Rebu_Backup_' + projectName + '_' + new Date().toISOString().slice(0, 10) + '.zip';
+      a.download = projectName + '_Rebu_' + new Date().toISOString().slice(0, 10) + '.zip';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -4338,7 +4338,7 @@ was morgen kommt – wer ist dabei?</p>
         if (state.dirty) {
           parts.push('<span style="color:#e8a838"> \u25CF Bearbeitet</span>');
         } else if (state.lastFileSaveTime) {
-          const t = state.lastFileSaveTime.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+          const t = state.lastFileSaveTime.toLocaleTimeString('de-CH', {hour:'2-digit', minute:'2-digit'});
           parts.push('<span style="color:#4a9"> \u2713 ' + t + '</span>');
         }
       } else {
@@ -19183,8 +19183,8 @@ ${chunkText}`;
         .substring(0, 60);
       const now = new Date();
       const datum = now.toISOString().slice(0, 10); // JJJJ-MM-TT
-      const zeit = now.toTimeString().slice(0, 5).replace(':', '-'); // HH-MM
-      return `${datum} Rebu ${name} ${typ}.${ext}`;
+      // Einheitliches Muster über alle N!NA-Apps: Stück_App_[Typ]_Datum
+      return `${name}_Rebu_${typ}_${datum}.${ext}`;
     }
     
     function downloadHTML(content, filename) {
@@ -19292,7 +19292,7 @@ ${chunkText}`;
             // Erstmaliges Sichern → Picker öffnen
             const projectName = (state.projektMeta.titel || 'Projekt').replace(/[^a-zA-Z0-9äöüÄÖÜßéèêàáâ\s-]/g, '').replace(/\s+/g, '_');
             savedFileHandle = await window.showSaveFilePicker({
-              suggestedName: 'Rebu_' + projectName + '.zip',
+              suggestedName: projectName + '_Rebu_' + new Date().toISOString().slice(0, 10) + '.zip',
               types: [{
                 description: 'Rebu Sicherungskopie',
                 accept: { 'application/zip': ['.zip'] }
@@ -19326,7 +19326,7 @@ ${chunkText}`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'Rebu_Backup_' + projectName2 + '_' + new Date().toISOString().slice(0, 10) + '.zip';
+      a.download = projectName2 + '_Rebu_' + new Date().toISOString().slice(0, 10) + '.zip';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -19346,7 +19346,7 @@ ${chunkText}`;
       // Kurze Bestätigung oben rechts einblenden
       const toast = document.createElement('div');
       const now = new Date();
-      const time = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      const time = now.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
       const fileName = state.filePath ? ' → ' + state.filePath : '';
       toast.textContent = '✅ Gesichert um ' + time + fileName;
       toast.style.cssText = 'position:fixed;top:20px;right:20px;background:#059669;color:white;padding:10px 20px;border-radius:8px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:opacity 0.3s;';
