@@ -8522,17 +8522,13 @@ HANDELN STATT NUR BESCHREIBEN:
           </div>
           <div class="flex items-center gap-3">
             <span id="autosave-indicator" class="text-xs text-gray-400" style="min-width: 120px;"></span>
-            <button class="dramera-twin-btn" onclick="openModal('showTwinModal')" title="${getTwinSyncText() ? 'Letzter Sync: ' + getTwinSyncText() : 'Projekt in Dramera (Werkbank) öffnen'}">
-              <span style="font-size: 14px;">📐</span> Dramera
-              <span class="sync-dot ${getTwinSyncDotClass()}"></span>
-            </button>
             <span class="px-2 py-1 ${isCloudProject ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'} rounded-full text-xs font-medium">
               ${isCloudProject ? '☁️' : '💾'} ${projektName}
             </span>
             <button class="text-xs text-gray-500 hover:text-blue-600" onclick="openProjektModal(state.projektId)" title="Struktur bearbeiten">
               ⚙️ ${(state.projektMeta.eigeneGruppen || []).length} Teile
             </button>
-            <span class="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+            <span class="text-xs text-gray-400" title="Referenz-Fassung für die Änderungsverfolgung – wird beim Anlegen einer neuen Fassung aktualisiert, nicht bei jeder Speicherung.">
               ${state.projektMeta.fassung || 'Arbeitsfassung'}
             </span>
             <button class="text-gray-400 hover:text-blue-600" onclick="openModal('showHelpModal')" title="Hilfe & Tastenkürzel (?)">
