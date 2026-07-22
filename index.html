@@ -7452,7 +7452,7 @@ ${szene.zusammenfassung ? `Zusammenfassung: ${szene.zusammenfassung}` : ''}
             items: {
               type: 'object',
               properties: {
-                typ: { type: 'string', enum: ['szenen_zusammenfuehren', 'szene_umbenennen', 'szene_anlegen', 'cues_neu_nummerieren', 'figur_ersetzen', 'figur_anlegen', 'text_ersetzen'] },
+                typ: { type: 'string', enum: ['szenen_zusammenfuehren', 'szene_umbenennen', 'szene_ort_setzen', 'szene_anlegen', 'cues_neu_nummerieren', 'figur_ersetzen', 'figur_anlegen', 'text_ersetzen'] },
                 szenenNummern: { type: 'array', items: { type: 'string' }, description: 'Für szenen_zusammenfuehren: die Nummern der Szenen, z.B. ["1.1","1.2","2"]. Die erste in Stückreihenfolge wird zur Zielszene.' },
                 szeneNummer: { type: 'string', description: 'Nummer einer einzelnen Szene (umbenennen, text_ersetzen in einer Szene).' },
                 titel: { type: 'string', description: 'Neuer/anzulegender Szenentitel.' },
@@ -7529,6 +7529,8 @@ ${szene.zusammenfassung ? `Zusammenfassung: ${szene.zusammenfassung}` : ''}
           return `🔗 Szenen ${(a.szenenNummern || []).join(', ')} zu einer zusammenführen${a.titel ? ` («${a.titel}»)` : ''}`;
         case 'szene_umbenennen':
           return `✏️ Szene ${a.szeneNummer} umbenennen in «${a.titel}»`;
+        case 'szene_ort_setzen':
+          return `📍 Szene ${a.szeneNummer}: Ort «${a.ort || ''}»${a.zeit ? `, Zeit «${a.zeit}»` : ''}`;
         case 'szene_anlegen':
           return `➕ Neue Szene «${a.titel || 'Ohne Titel'}»${a.nummer ? ` (Nr. ${a.nummer})` : ''}`;
         case 'cues_neu_nummerieren':
@@ -7558,6 +7560,13 @@ ${szene.zusammenfassung ? `Zusammenfassung: ${szene.zusammenfassung}` : ''}
           if (a.ort != null) s.ort = a.ort;
           if (a.zeit != null) s.zeit = a.zeit;
           return `Szene ${s.nummer} umbenannt in «${s.titel}».`;
+        }
+        case 'szene_ort_setzen': {
+          const s = _kiResolveSzene(a.szeneNummer);
+          if (!s) return `Szene ${a.szeneNummer} nicht gefunden.`;
+          if (a.ort != null) s.ort = a.ort;
+          if (a.zeit != null) s.zeit = a.zeit;
+          return `Szene ${s.nummer}: Ort «${s.ort || ''}»${a.zeit != null ? `, Zeit «${s.zeit || ''}»` : ''} gesetzt.`;
         }
         case 'szene_anlegen': {
           const id = genId();
@@ -7756,7 +7765,8 @@ HANDELN STATT NUR BESCHREIBEN:
 - Wenn der Nutzer eine Änderung an den Daten wünscht (Szenen zusammenführen, umbenennen, anlegen; Cues neu nummerieren; eine Figur ersetzen/umbenennen – auch im Text; Text suchen/ersetzen), dann BESCHREIBE die Lösung nicht bloss, sondern rufe das Tool "regiebuch_aktionen" mit den konkreten Aktionen auf.
 - Sprich Szenen über ihre Nummer an (z.B. "1.1", "2"), Figuren über Name oder Kürzel.
 - Der Nutzer bekommt eine Vorschau und bestätigt selbst – du musst nicht um Erlaubnis bitten. Erkläre im Text kurz, was der Plan bewirkt.
-- Wenn zusätzlich Textvorschläge sinnvoll sind (z.B. angepasste Dialoge), nenne sie im Text und setze die konkreten Ersetzungen als text_ersetzen-Aktionen.`;
+- Wenn zusätzlich Textvorschläge sinnvoll sind (z.B. angepasste Dialoge), nenne sie im Text und setze die konkreten Ersetzungen als text_ersetzen-Aktionen.
+- WICHTIG: Halte den erklärenden Text KURZ. Schreibe keine langen Listen als Prosa, wenn die Aufgabe eine Änderung ist – stecke die eigentliche Arbeit in die Tool-Aktionen. Bei vielen gleichartigen Änderungen (z.B. Ort für viele Szenen bestimmen) erzeuge PRO Szene eine Aktion "szene_ort_setzen" mit szeneNummer und ort. So gehen keine Schritte durch das Antwortlimit verloren.`;
         
         // Nachrichten für API vorbereiten (ohne lokale Begrüssung)
         const apiMessages = state.kiMessages
@@ -7774,12 +7784,12 @@ HANDELN STATT NUR BESCHREIBEN:
           },
           body: JSON.stringify({
             model: CLAUDE_MODEL,
-            max_tokens: 4096,
+            max_tokens: 8192,
             system: systemPrompt,
             tools: [REGIE_AKTIONEN_TOOL],
             messages: apiMessages
           })
-        }, 90000);
+        }, 120000);
 
         if (!response.ok) {
           const errText = await response.text();
