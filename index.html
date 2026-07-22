@@ -1693,11 +1693,32 @@
       });
     }
     
+    // Warnbanner, wenn beim Öffnen Audiodateien fehlen (z.B. weil nur eine
+    // einzelne Backup-Datei statt des vollständigen ZIP geöffnet wurde).
+    function zeigeMedienWarnung(anzahl) {
+      const alt = document.getElementById('medien-warnung');
+      if (alt) alt.remove();
+      const bar = document.createElement('div');
+      bar.id = 'medien-warnung';
+      bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b45309;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;padding:10px 16px;display:flex;align-items:center;gap:12px;box-shadow:0 -2px 8px rgba(0,0,0,0.2);';
+      const txt = document.createElement('span');
+      txt.style.flex = '1';
+      txt.textContent = '⚠️ ' + anzahl + ' Audiodatei' + (anzahl === 1 ? '' : 'en') + ' fehlen. Du hast wahrscheinlich nur eine einzelne Backup-Datei geöffnet – die eigentlichen Dateien stecken im vollständigen ZIP-Backup. Öffne dieses, um die Medien wiederherzustellen.';
+      const btn = document.createElement('button');
+      btn.textContent = 'Verstanden';
+      btn.style.cssText = 'background:#fff;color:#b45309;border:none;border-radius:4px;padding:6px 12px;font-weight:600;cursor:pointer;flex-shrink:0;';
+      btn.onclick = function () { bar.remove(); };
+      bar.appendChild(txt);
+      bar.appendChild(btn);
+      document.body.appendChild(bar);
+    }
+
     // Alle Audio-URLs beim Start wiederherstellen
     async function restoreAudioUrls() {
       if (!mediaBD) await initAudioDB();
 
       let repariert = 0;
+      let fehlendAudio = 0;
       for (const medium of state.medien) {
         const istLokalesMedium = (medium.type === 'audio' || medium.type === 'video') && medium.source === 'local';
         try {
@@ -1719,9 +1740,11 @@
             console.log('✅ Medium wiederhergestellt:', medium.name);
           } else if (istLokalesMedium) {
             console.warn('Medium nicht in IndexedDB gefunden:', medium.name);
+            if (medium.type === 'audio') fehlendAudio++;
           }
         } catch (e) {
           if (istLokalesMedium) console.warn('Medium nicht gefunden:', medium.name);
+          if (medium.type === 'audio') fehlendAudio++;
         }
       }
       if (repariert > 0) {
@@ -1729,6 +1752,9 @@
         saveProjektDaten();
         render();
       }
+      // Nur bei echtem Audio warnen – Video muss ohnehin nach Neustart neu
+      // gewählt werden und gilt nicht als Verlust.
+      if (fehlendAudio > 0) zeigeMedienWarnung(fehlendAudio);
     }
     
     // Speicherplatz-Info
@@ -2661,6 +2687,11 @@
           note: item.note || '', tags: item.tags || [], used: item.used || false,
           createdAt: item.createdAt || ''
         })),
+
+        // Medien-Metadaten (Audio/Video). Die Binärdaten liegen in IndexedDB und
+        // werden beim Öffnen auf demselben Gerät über die id wiederverbunden; so
+        // gehen Medien auch beim Einlesen einer Austauschdatei nicht verloren.
+        medien: (state.medien || []).map(m => { const k = Object.assign({}, m); delete k.localFileUrl; return k; }),
 
         musikkonzept: {
           konzept_text: state.musikkonzept?.konzept || '',
@@ -5112,17 +5143,37 @@ was morgen kommt – wer ist dabei?</p>
               return kopie;
             });
           } else if (d.recherche && d.recherche.length > 0) {
-            // Legacy-Backup: reduzierte Felder – restoreAudioUrls repariert
-            // die Verknüpfung automatisch, wenn die Daten noch in IndexedDB liegen.
-            state.medien = d.recherche.map(r => ({
-              id: r.id || genId(),
-              typ: r.typ || 'text',
-              titel: r.titel || 'Material',
-              name: r.titel || 'Material',
-              inhalt: r.inhalt || r.text || '',
-              url: r.url || '',
-              szenen: [],
-            }));
+            // WICHTIG: Nur echte Medien (Audio/Video) aus dem Legacy-Feld
+            // übernehmen. Das «recherche»-Feld der NINA-Austauschdatei enthält
+            // dagegen Recherche-/Textmaterial – daraus dürfen KEINE leeren
+            // «Material»-Medien entstehen (sonst verschwinden die echten Medien).
+            const legacyMedien = d.recherche.filter(r => r.typ === 'audio' || r.typ === 'video');
+            if (legacyMedien.length > 0) {
+              state.medien = legacyMedien.map(r => ({
+                id: r.id || genId(),
+                typ: r.typ,
+                titel: r.titel || r.name || '',
+                name: r.titel || r.name || 'Medium',
+                inhalt: r.inhalt || r.text || '',
+                url: r.url || '',
+                source: 'local',
+                szenen: [],
+              }));
+            }
+            // Recherche-/Textmaterial ggf. dorthin übernehmen, wo es hingehört
+            if (!d.rechercheMaterial) {
+              const echteRecherche = d.recherche.filter(r => r.typ && r.typ !== 'audio' && r.typ !== 'video');
+              if (echteRecherche.length > 0) {
+                state.rechercheMaterial = echteRecherche.map(r => ({
+                  id: r.id || genId(),
+                  type: r.type || r.typ || 'text',
+                  title: r.title || r.titel || '',
+                  content: r.content || r.inhalt || '',
+                  url: r.url || '',
+                  szeneIds: r.szeneIds || []
+                }));
+              }
+            }
           }
           
           // v3.0 Felder
@@ -7777,6 +7828,7 @@ WICHTIGE REGELN:
         ${state.showRequisitenModal ? renderRequisitenModal() : ''}
         ${state.showPersonModal ? renderPersonModal() : ''}
         ${state.showKonfliktModal ? renderKonfliktModal() : ''}
+        ${state.showSzeneKiModal ? renderSzeneKiModal() : ''}
         ${state.showBuehneModal ? renderBuehneModal() : ''}
         ${state.showLightbox ? renderLightbox() : ''}
         ${showCueExportDialog ? renderCueExportDialog() : ''}
@@ -7967,20 +8019,26 @@ WICHTIGE REGELN:
     }
 
     function renderSidebar() {
-      const navItems = [
-        { id: 'titelblatt', icon: '📖', label: 'Titelblatt' },
-        { id: 'textbuch', icon: '📝', label: 'Textbuch' },
-        { id: 'szenen', icon: '🎬', label: 'Szenen' },
-        { id: 'figuren', icon: '👤', label: 'Figuren' },
-        { id: 'buehne', icon: '🎪', label: 'Bühne' },
-        { id: 'requisiten', icon: '🎭', label: 'Requisiten' },
-        { id: 'kostueme', icon: '👗', label: 'Kostüme' },
-        { id: 'medien', icon: '🎵', label: 'Medien' },
-        { id: 'cues', icon: '💡', label: 'Cue-Listen' },
-        { id: 'uebersichten', icon: '📊', label: 'Übersichten' },
-        { id: 'fassungen', icon: '📚', label: 'Fassungen' },
-        { id: 'konzept', icon: '🧭', label: 'Konzept' },
-        { id: 'teamproben', icon: '👥', label: 'Team & Proben' },
+      const navSections = [
+        { titel: 'Stück', items: [
+          { id: 'titelblatt', icon: '📖', label: 'Titelblatt' },
+          { id: 'textbuch', icon: '📝', label: 'Textbuch' },
+          { id: 'szenen', icon: '🎬', label: 'Szenen' },
+          { id: 'figuren', icon: '👤', label: 'Figuren' },
+          { id: 'konzept', icon: '🧭', label: 'Konzept' },
+        ]},
+        { titel: 'Ausstattung & Technik', items: [
+          { id: 'buehne', icon: '🎪', label: 'Bühne' },
+          { id: 'requisiten', icon: '🎭', label: 'Requisiten' },
+          { id: 'kostueme', icon: '👗', label: 'Kostüme' },
+          { id: 'medien', icon: '🎵', label: 'Medien' },
+          { id: 'cues', icon: '💡', label: 'Cue-Listen' },
+        ]},
+        { titel: 'Überblick & Organisation', items: [
+          { id: 'uebersichten', icon: '📊', label: 'Übersichten' },
+          { id: 'fassungen', icon: '📚', label: 'Fassungen' },
+          { id: 'teamproben', icon: '👥', label: 'Team & Proben' },
+        ]},
       ];
       
       // Cloud-Status (Drive entfernt)
@@ -8084,18 +8142,20 @@ WICHTIGE REGELN:
           
           <!-- Navigation -->
           <nav class="flex-1 py-2 overflow-y-auto">
-            <div class="px-3 py-2">
-              <div class="nav-section">Module</div>
-            </div>
-            ${navItems.map(item => `
-              <div class="nav-item ${state.currentView === item.id ? 'active' : ''} px-3 py-2 flex items-center gap-2"
-                   role="button" tabindex="0"
-                   aria-current="${state.currentView === item.id ? 'page' : 'false'}"
-                   onclick="navigateTo('${item.id}')"
-                   onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();navigateTo('${item.id}')}">
-                <span aria-hidden="true">${item.icon}</span>
-                <span class="text-sm">${item.label}</span>
+            ${navSections.map(section => `
+              <div class="px-3 py-2 pt-3">
+                <div class="nav-section">${section.titel}</div>
               </div>
+              ${section.items.map(item => `
+                <div class="nav-item ${state.currentView === item.id ? 'active' : ''} px-3 py-2 flex items-center gap-2"
+                     role="button" tabindex="0"
+                     aria-current="${state.currentView === item.id ? 'page' : 'false'}"
+                     onclick="navigateTo('${item.id}')"
+                     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();navigateTo('${item.id}')}">
+                  <span aria-hidden="true">${item.icon}</span>
+                  <span class="text-sm">${item.label}</span>
+                </div>
+              `).join('')}
             `).join('')}
           </nav>
           
@@ -8919,6 +8979,11 @@ WICHTIGE REGELN:
             <div class="detail-section">
               <div class="detail-label">Szene bearbeiten</div>
               ${szene ? `
+                ${getApiKey() ? `
+                  <button class="btn btn-sm w-full mb-2" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;font-weight:600;" onclick="analyzeSzeneKI('${szene.id}')" ${state.szeneKiLoading === szene.id ? 'disabled' : ''} title="KI: Requisiten, Kostüme, Bühnenbild und Cues in dieser Szene finden">
+                    ${state.szeneKiLoading === szene.id ? '⏳ Analysiere…' : '🔎 KI: Szene analysieren'}
+                  </button>
+                ` : ''}
                 <div class="space-y-2">
                   <div class="grid grid-cols-3 gap-2">
                     <div>
@@ -9162,6 +9227,7 @@ WICHTIGE REGELN:
                         </div>
                       </div>
                       <div class="flex gap-1 flex-shrink-0">
+                        ${getApiKey() ? `<button class="btn btn-xs" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;font-weight:600;" onclick="event.stopPropagation(); analyzeSzeneKI('${s.id}')" title="KI: Requisiten, Kostüme, Bühnenbild und Cues in dieser Szene finden" ${state.szeneKiLoading === s.id ? 'disabled' : ''}>${state.szeneKiLoading === s.id ? '⏳ …' : '🔎 KI'}</button>` : ''}
                         <button class="btn btn-xs btn-primary" onclick="event.stopPropagation(); state._cameFromSzenen = true; selectSzene('${s.id}'); navigateTo('textbuch');" title="Zum Dialogtext springen" style="font-weight: 600;">
                           → Text
                         </button>
@@ -9180,6 +9246,181 @@ WICHTIGE REGELN:
           </div>
         `;
       }).join('');
+    }
+
+    // ============================================
+    // KI: SZENE ANALYSIEREN (Requisiten, Kostüme, Bühnenbild, Cues)
+    // Auf Abruf pro Szene. Vorschläge erscheinen zur Bestätigung; erst
+    // «Übernehmen» legt Einträge an. Der Knopf zeigt sich nur mit KI-Schlüssel.
+    // ============================================
+    async function analyzeSzeneKI(szeneId) {
+      const apiKey = getApiKey();
+      if (!apiKey) { alert('Für die Szenen-Analyse braucht es einen KI-Schlüssel (Menü → KI-Einstellungen).'); return; }
+      const szene = state.szenen.find(s => s.id === szeneId);
+      if (!szene) return;
+      const tmp = document.createElement('div');
+      tmp.innerHTML = state.textbuch[szeneId] || '';
+      const text = (tmp.textContent || '').trim();
+      if (text.length < 20) { alert('Diese Szene enthält kaum Text zum Analysieren.'); return; }
+
+      state.szeneKiLoading = szeneId;
+      render();
+
+      const prompt = `Du bist ein erfahrener Regie- und Ausstattungsassistent. Analysiere den folgenden Szenentext und finde, was für die Inszenierung konkret gebraucht wird. Schreibe in Schweizer Rechtschreibung (immer "ss" statt Eszett).
+
+Gib AUSSCHLIESSLICH gültiges JSON in diesem Format zurück (keine Erklärung davor oder danach):
+{
+  "requisiten": [{"name": "kurzer Name", "beschreibung": "knapp", "ankerText": "belegende Textstelle"}],
+  "kostueme": [{"name": "Kleidungsstück/Kostüm", "figur": "zu welcher Figur, falls erkennbar", "beschreibung": "knapp", "ankerText": "Textstelle"}],
+  "buehne": [{"name": "Bühnenbild-Element/Möbel/Versatzstück", "beschreibung": "knapp", "ankerText": "Textstelle"}],
+  "cues": [{"typ": "lx | q | v", "beschreibung": "was passiert (lx=Licht, q=Ton/Musik/Geräusch, v=Video)", "ankerText": "auslösende Textstelle"}]
+}
+
+Regeln:
+- Nur aufnehmen, was wirklich im Text steht oder klar impliziert ist. Nichts erfinden.
+- "ankerText" ist ein kurzer, wörtlicher Ausschnitt aus dem Text (max. ca. 60 Zeichen).
+- Video (typ "v") nur, wenn im Text tatsächlich Projektion/Video/Film vorkommt.
+- Leere Liste, wenn es in einer Kategorie nichts gibt.
+
+SZENENTEXT (${szene.nummer} ${szene.titel}):
+${text}`;
+
+      try {
+        const response = await rebuFetchWithTimeout('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+          body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] })
+        }, 120000);
+        if (!response.ok) { const t = await response.text(); throw new Error('API-Fehler ' + response.status + ': ' + t.substring(0, 200)); }
+        const data = await response.json();
+        if (!data.content || !data.content[0] || typeof data.content[0].text !== 'string') throw new Error('Unerwartete KI-Antwort.');
+        const aiText = data.content[0].text;
+        const codeBlock = aiText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        const raw = codeBlock ? codeBlock[1] : (aiText.match(/\{[\s\S]*\}/)?.[0] || aiText);
+        const json = JSON.parse(raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '').replace(/,\s*([}\]])/g, '$1'));
+
+        const flat = [];
+        (Array.isArray(json.requisiten) ? json.requisiten : []).forEach(x => flat.push({ kat: 'requisit', name: x.name || '', beschreibung: x.beschreibung || '', anker: x.ankerText || '' }));
+        (Array.isArray(json.kostueme) ? json.kostueme : []).forEach(x => flat.push({ kat: 'kostuem', name: x.name || '', figur: x.figur || '', beschreibung: x.beschreibung || '', anker: x.ankerText || '' }));
+        (Array.isArray(json.buehne) ? json.buehne : []).forEach(x => flat.push({ kat: 'buehne', name: x.name || '', beschreibung: x.beschreibung || '', anker: x.ankerText || '' }));
+        (Array.isArray(json.cues) ? json.cues : []).forEach(x => flat.push({ kat: 'cue', typ: (['lx', 'q', 'v'].includes(x.typ) ? x.typ : 'lx'), beschreibung: x.beschreibung || '', anker: x.ankerText || '' }));
+
+        state.szeneKiVorschlaege = { szeneId: szeneId, flat: flat };
+        state.szeneKiLoading = null;
+        state.showSzeneKiModal = true;
+        render();
+      } catch (err) {
+        state.szeneKiLoading = null;
+        render();
+        alert('Analyse fehlgeschlagen: ' + err.message);
+      }
+    }
+
+    function _kiItemExists(it, szeneId) {
+      const gl = (a, b) => (a || '').toLowerCase() === (b || '').toLowerCase();
+      if (it.kat === 'requisit') return state.requisiten.some(r => gl(r.name, it.name) && (r.szenen || []).includes(szeneId));
+      if (it.kat === 'kostuem') return state.kostueme.some(k => gl(k.name, it.name) && (k.szenen || []).includes(szeneId));
+      if (it.kat === 'buehne') return state.buehne.some(b => gl(b.name, it.name) && (b.szenen || []).includes(szeneId));
+      if (it.kat === 'cue') return state.cues.some(c => c.szeneId === szeneId && c.typ === it.typ && gl(c.beschreibung, it.beschreibung));
+      return false;
+    }
+
+    function renderSzeneKiModal() {
+      const v = state.szeneKiVorschlaege;
+      if (!v) return '';
+      const szene = state.szenen.find(s => s.id === v.szeneId);
+      const cueTypLabel = { lx: '💡 Licht', q: '🔊 Ton/Musik', v: '🎬 Video' };
+      const katLabel = { requisit: '🎭 Requisiten', kostuem: '👗 Kostüme', buehne: '🎪 Bühnenbild', cue: '💡 Cues (Licht/Ton/Video)' };
+      const reihenfolge = ['requisit', 'kostuem', 'buehne', 'cue'];
+
+      let bodyHtml = '';
+      let anzahl = 0;
+      reihenfolge.forEach(kat => {
+        const items = v.flat.map((it, i) => ({ it, i })).filter(x => x.it.kat === kat);
+        if (items.length === 0) return;
+        bodyHtml += `<div class="mb-4"><div class="font-semibold text-sm mb-1">${katLabel[kat]}</div>`;
+        items.forEach(({ it, i }) => {
+          anzahl++;
+          const exists = _kiItemExists(it, v.szeneId);
+          const titel = it.kat === 'cue' ? (cueTypLabel[it.typ] + ': ' + (it.beschreibung || '')) : it.name;
+          const sub = it.kat === 'kostuem' && it.figur ? ('Figur: ' + it.figur) : (it.kat !== 'cue' ? it.beschreibung : '');
+          bodyHtml += `
+            <label class="flex items-start gap-2 py-1.5 border-b border-gray-50 text-sm" style="cursor:pointer;${exists ? 'opacity:0.55;' : ''}">
+              <input type="checkbox" data-ki-idx="${i}" ${exists ? '' : 'checked'} style="margin-top:4px;">
+              <span style="flex:1;">
+                <span class="font-medium">${escapeHtml(titel || '—')}</span>
+                ${sub ? ` <span class="text-gray-500">– ${escapeHtml(sub)}</span>` : ''}
+                ${exists ? ' <span class="text-xs text-gray-400">(schon vorhanden)</span>' : ''}
+                ${it.anker ? `<div class="text-xs text-gray-400 italic mt-0.5">„${escapeHtml(it.anker)}“</div>` : ''}
+              </span>
+            </label>`;
+        });
+        bodyHtml += `</div>`;
+      });
+
+      if (anzahl === 0) {
+        bodyHtml = '<div class="text-center text-gray-400 py-8">Die KI hat in dieser Szene nichts Konkretes gefunden.</div>';
+      }
+
+      return `
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showSzeneKiModal')">
+          <div class="modal-content" style="max-width:620px;max-height:85vh;overflow-y:auto;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+              <h2 class="text-lg font-semibold">🔎 KI-Analyse${szene ? ' · Szene ' + escapeHtml(szene.nummer) : ''}</h2>
+              <button class="text-gray-400 hover:text-gray-600" onclick="closeModal('showSzeneKiModal')">✕</button>
+            </div>
+            <div class="modal-body">
+              <p class="text-sm text-gray-500 mb-3">Vorschläge aus dem Szenentext. Häkchen setzen bei allem, was du übernehmen willst – erst dann werden die Einträge angelegt und mit dieser Szene verknüpft.</p>
+              ${anzahl > 0 ? '<div class="mb-2"><button class="btn btn-outline btn-xs" onclick="toggleAllSzeneKi()">Alle auswählen / abwählen</button></div>' : ''}
+              ${bodyHtml}
+              <div class="flex justify-end gap-2 mt-4">
+                <button class="btn btn-outline" onclick="closeModal('showSzeneKiModal')">Schliessen</button>
+                ${anzahl > 0 ? '<button class="btn btn-primary" onclick="applySzeneKiVorschlaege()">Ausgewählte übernehmen</button>' : ''}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function toggleAllSzeneKi() {
+      const boxes = document.querySelectorAll('input[data-ki-idx]');
+      const anyUnchecked = Array.from(boxes).some(b => !b.checked);
+      boxes.forEach(b => { b.checked = anyUnchecked; });
+    }
+
+    function applySzeneKiVorschlaege() {
+      const v = state.szeneKiVorschlaege;
+      if (!v) return;
+      const szeneId = v.szeneId;
+      const checked = new Set();
+      document.querySelectorAll('input[data-ki-idx]').forEach(b => { if (b.checked) checked.add(parseInt(b.dataset.kiIdx, 10)); });
+      let addR = 0, addK = 0, addB = 0, addC = 0;
+      v.flat.forEach((it, i) => {
+        if (!checked.has(i) || _kiItemExists(it, szeneId)) return;
+        if (it.kat === 'requisit') {
+          state.requisiten.push({ id: genId(), name: it.name || 'Requisit', zustaendig: '', beschreibung: it.beschreibung || '', szenen: [szeneId], bilder: [], notizen: '', erstelltVonKI: true });
+          addR++;
+        } else if (it.kat === 'kostuem') {
+          let figurId = '';
+          if (it.figur) { const f = state.figuren.find(f => (f.name || '').toLowerCase() === (it.figur || '').toLowerCase()); if (f) figurId = f.id; }
+          state.kostueme.push({ id: genId(), name: it.name || 'Kostüm', figur: figurId, beschreibung: it.beschreibung || '', maske: '', szenen: [szeneId], notizen: '', kostuemBilder: [], maskeBilder: [], erstelltVonKI: true });
+          addK++;
+        } else if (it.kat === 'buehne') {
+          state.buehne.push({ id: genId(), name: it.name || 'Element', kategorie: 'Sonstiges', beschreibung: it.beschreibung || '', bilder: [], notizen: '', szenen: [szeneId], erstelltVonKI: true });
+          addB++;
+        } else if (it.kat === 'cue') {
+          const typ = it.typ || 'lx';
+          const nummer = state.cues.filter(c => c.typ === typ).reduce((m, c) => Math.max(m, c.nummer || 0), 0) + 1;
+          state.cues.push({ id: genId(), typ: typ, nummer: nummer, szeneId: szeneId, beschreibung: it.beschreibung || '', ankerText: it.anker || '', dauer: '', erstelltVonKI: true });
+          addC++;
+        }
+      });
+      saveProjektDaten();
+      state.showSzeneKiModal = false;
+      state.szeneKiVorschlaege = null;
+      render();
+      alert('Übernommen: ' + addR + ' Requisiten, ' + addK + ' Kostüme, ' + addB + ' Bühnenbild, ' + addC + ' Cues.');
     }
 
     // ============================================
@@ -17146,6 +17387,7 @@ ${chunkText}`;
       state.editingKostuem = null;
       state.editingMedium = null;
       state.editingPerson = null;
+      if (modalName === 'showSzeneKiModal') state.szeneKiVorschlaege = null;
       if (modalName === 'showProjektModal') {
         editingProjekt = null;
         pendingTitelbild = null;
