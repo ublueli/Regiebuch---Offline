@@ -12651,6 +12651,20 @@ ${text}`;
                   <div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 8px;">📋 Gefundene Daten:</div>
                   <div id="import-nina-details" style="font-size: 12px; color: #6b7280;"></div>
                 </div>
+
+                <div style="margin-bottom: 16px; padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px;">
+                  <div style="font-size: 12px; font-weight: 600; color: #9a3412; margin-bottom: 8px;">Was soll übernommen werden?</div>
+                  <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:#7c2d12; margin-bottom:6px; cursor:pointer;">
+                    <input type="checkbox" id="nina-uebernahme-personen" checked style="margin-top:2px;">
+                    <span><strong>Ensemble, Team und Probeplan</strong><br>
+                    <span style="color:#9a3412;">Personen und Termine aus Propla. Das ist der übliche Fall.</span></span>
+                  </label>
+                  <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:#7c2d12; cursor:pointer;">
+                    <input type="checkbox" id="nina-uebernahme-struktur" style="margin-top:2px;">
+                    <span><strong>Auch Figuren und Szenen</strong><br>
+                    <span style="color:#9a3412;">Nur ankreuzen, wenn die Struktur wirklich aus Propla kommen soll. Sonst werden Szenen doppelt angelegt oder umbenannt.</span></span>
+                  </label>
+                </div>
                 
                 <div class="flex gap-2">
                   <button class="btn btn-outline flex-1" onclick="closeModal('showImportModal')">Abbrechen</button>
@@ -13195,8 +13209,25 @@ ${text}`;
     // NINA-EXCHANGE IMPORT v2.0
     // Vollständiger Import inkl. Texte!
     // ============================================
+    // Was der Propla-Import übernehmen soll. Standard: nur Personen und Probeplan.
+    // Szenen und Figuren bleiben unangetastet, solange das Projekt schon welche hat –
+    // sonst überschreibt eine ältere Propla-Struktur die Arbeit im Regiebuch.
+    var ninaImportUmfang = { personen: true, struktur: false };
+
     async function doImportNina() {
       if (!ninaImportData) return;
+
+      const cbP = document.getElementById('nina-uebernahme-personen');
+      const cbS = document.getElementById('nina-uebernahme-struktur');
+      if (cbP) ninaImportUmfang.personen = cbP.checked;
+      if (cbS) ninaImportUmfang.struktur = cbS.checked;
+
+      if (ninaImportUmfang.struktur && (state.szenen || []).length > 0) {
+        const anz = ((ninaImportData.scenes || []).length) || 0;
+        if (!confirm('Achtung: Die Szenen aus Propla werden mit deinen ' + state.szenen.length +
+              ' Szenen zusammengeführt. Propla liefert ' + anz + ' Szenen.\n\n' +
+              'Dabei können Szenen doppelt angelegt oder umbenannt werden.\n\nTrotzdem übernehmen?')) return;
+      }
 
       // Laufende asynchrone Projektdaten-Ladungen entwerten (Race-Schutz)
       _projektLoadToken++;
@@ -13251,7 +13282,7 @@ ${text}`;
         const newFiguren = [...existingFiguren];
         const figurenIdMap = {};
         
-        for (const fig of (data.figures || [])) {
+        for (const fig of (ninaImportUmfang.struktur ? (data.figures || []) : [])) {
           // 1. Zuerst nach _exchangeId matchen (erkennt Umbenennungen!)
           let existIdx = newFiguren.findIndex(f => f._exchangeId && f._exchangeId === fig.id);
           
@@ -13423,6 +13454,7 @@ ${text}`;
         };
         // === SZENEN IMPORTIEREN (inkl. TEXT!) ===
         const newSzenen = [...existingSzenen];
+        const _szenenQuelle = ninaImportUmfang.struktur ? (data.scenes || []) : [];
         const newTextbuch = { ...existingTextbuch };
         const szenenIdMap = {};
         let updatedSzenen = 0;
@@ -13475,7 +13507,7 @@ ${text}`;
         
         let renamedSzenenCount = 0;
         
-        for (const scene of (data.scenes || [])) {
+        for (const scene of _szenenQuelle) {
           const existing = findExistingSzene(scene);
           
           if (existing) {
