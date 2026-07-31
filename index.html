@@ -1391,7 +1391,18 @@
     
     // HTML-Zeichen escapen für sichere Anzeige in Attributen
     const escapeHtml = (str) => {
-      if (!str) return '';
+      if (str === null || str === undefined || str === '') return '';
+      if (typeof str !== 'string') {
+        // Adressen und andere Objekte kommen aus dem Propla-Import als Objekt an.
+        if (typeof str === 'object') {
+          const teile = [str.street || str.strasse, str.number || str.hausnummer,
+                         str.zip || str.plz, str.city || str.ort].filter(Boolean);
+          str = teile.length ? teile.join(' ') : '';
+        } else {
+          str = String(str);
+        }
+        if (!str) return '';
+      }
       return str
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -11379,7 +11390,15 @@ ${text}`;
       const zeile1 = [p.strasse, p.hausnummer].filter(Boolean).join(' ');
       const zeile2 = [p.plz, p.ort].filter(Boolean).join(' ');
       const s = [zeile1, zeile2].filter(Boolean).join(', ');
-      return s || p.adresse || '';
+      if (s) return s;
+      // Aus Propla kommt die Adresse als Objekt {street, number, zip, city}.
+      const a = p.adresse;
+      if (a && typeof a === 'object') {
+        const z1 = [a.street || a.strasse, a.number || a.hausnummer].filter(Boolean).join(' ');
+        const z2 = [a.zip || a.plz, a.city || a.ort].filter(Boolean).join(' ');
+        return [z1, z2].filter(Boolean).join(', ');
+      }
+      return typeof a === 'string' ? a : '';
     }
 
     function renderEnsembleTab() {
@@ -11581,7 +11600,7 @@ ${text}`;
               <div class="grid grid-cols-3 gap-3 mb-3">
                 <div class="col-span-2">
                   <label class="block text-sm font-medium text-gray-700 mb-1">Strasse</label>
-                  <input type="text" id="person-strasse" value="${escapeHtml(p.strasse || (p.adresse || ''))}" autocomplete="off">
+                  <input type="text" id="person-strasse" value="${escapeHtml(p.strasse || fmtPersonAdresse(p))}" autocomplete="off">
                 </div>
                 <div>
                   <label class="block text-sm font-medium text-gray-700 mb-1">Nr.</label>
@@ -13602,7 +13621,7 @@ ${text}`;
         const mergeAdresse = (kategorie, obj, addr, personLabel) => {
           const inc = parseAdresse(addr);
           const incStr = [inc.strasse, inc.hausnummer, inc.plz, inc.ort].filter(Boolean).join(' ').trim();
-          const curStr = ([obj.strasse, obj.hausnummer, obj.plz, obj.ort].filter(Boolean).join(' ').trim()) || (obj.adresse || '');
+          const curStr = ([obj.strasse, obj.hausnummer, obj.plz, obj.ort].filter(Boolean).join(' ').trim()) || fmtPersonAdresse(obj);
           if (!incStr || incStr === curStr) return;
           if (!curStr) { obj.strasse = inc.strasse; obj.hausnummer = inc.hausnummer; obj.plz = inc.plz; obj.ort = inc.ort; return; }
           konflikte.push({ kategorie, id: obj.id, feld: 'adresse', feldLabel: 'Adresse', personLabel, aktuell: curStr, eingehend: incStr, adresseParts: inc });
