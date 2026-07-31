@@ -16218,7 +16218,7 @@ ${chunkText}`;
               paragraph: { spacing: { before: 0, after: 120, line: 264 }, indent: { left: 283 } } },
             { id: 'FigurName', name: 'Figurenname', basedOn: 'Normal', next: 'Dialog',
               run: { font: 'Trebuchet MS', size: 20, bold: true, allCaps: true, characterSpacing: 6, color: '212121' },
-              paragraph: { spacing: { before: 100, after: 20 } } },
+              paragraph: { spacing: { before: 100, after: 20 }, keepNext: true, keepLines: true } },
             { id: 'Regieanweisung', name: 'Regieanweisung', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Georgia', italics: true, size: 20, color: '414141' },
               paragraph: { spacing: { before: 60, after: 140 }, indent: { left: 2268 } } },
@@ -16239,10 +16239,10 @@ ${chunkText}`;
               paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 600, after: 240 } } },
             { id: 'SzenenTitel', name: 'Szenen-Titel', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Georgia', bold: true, size: 24, color: '212121' }, 
-              paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 360, after: 360 } } },
+              paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 240, after: 100 }, keepNext: true } },
             { id: 'OrtZeit', name: 'Ort-Zeit', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Trebuchet MS', bold: true, italics: true, size: 18, color: '757575' },
-              paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 80, after: 200 }, 
+              paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 40, after: 100 }, keepNext: true, 
                 border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'CCCCCC', space: 4 } } } },
             { id: 'Pause', name: 'Pause', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Trebuchet MS', bold: true, size: 24, color: '888888' }, 
@@ -16305,7 +16305,8 @@ ${chunkText}`;
       children.push(new Paragraph({
         children: [new TextRun({ text: szene.nummer + ' ' + szene.titel, bold: true, size: 24, font: 'Georgia', color: '212121' })],
         alignment: AlignmentType.CENTER,
-        spacing: { before: 360, after: 360 },
+        spacing: { before: 240, after: 100 },
+        keepNext: true,
         style: 'SzenenTitel'
       }));
       
@@ -16316,37 +16317,21 @@ ${chunkText}`;
             bold: true, italics: true, size: 18, color: '757575', font: 'Trebuchet MS'
           })],
           alignment: AlignmentType.CENTER,
-          spacing: { before: 80, after: 200 },
+          spacing: { before: 40, after: 100 },
+          keepNext: true,
           border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'CCCCCC', space: 4 } }
         }));
       }
       
-      if (szene.figuren && szene.figuren.length > 0) {
-        const namen = szene.figuren.map(fId => {
-          const fig = state.figuren.find(f => f.id === fId);
-          return fig ? fig.name : '';
-        }).filter(Boolean).join(', ');
-        if (namen) {
-          children.push(new Paragraph({
-            children: [
-              new TextRun({ text: 'Figuren: ', bold: true, size: 18, color: '888888', font: 'Trebuchet MS' }),
-              new TextRun({ text: namen, size: 18, color: '888888', font: 'Trebuchet MS' })
-            ],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 60 }
-          }));
-        }
-      }
+      // Figurenliste steht nur noch in der Szenenuebersicht vorne im Dokument.
       
-      if (szene.zusammenfassung) {
+      if (szene.zusammenfassung && includeCues) {
         children.push(new Paragraph({
           children: [new TextRun({ text: szene.zusammenfassung, italics: true, size: 19, color: '434343', font: 'Georgia' })],
           style: 'Szenenbeschreibung',
           spacing: { before: 120, after: 160 }
         }));
       }
-      
-      children.push(new Paragraph({ spacing: { before: 80 }, children: [] }));
       
       const szeneCues = includeCues ? state.cues.filter(c => c.szeneId === szene.id) : [];
       const content = state.textbuch[szene.id] || '';
@@ -16360,6 +16345,19 @@ ${chunkText}`;
       
       // Cue-Marker immer entfernen (wir fuegen eigene ein bei Technikfassung)
       temp.querySelectorAll('.cue-inline-marker, .cue-marker, .cue-badge').forEach(m => m.remove());
+
+      // In der Spielfassung stehen keine Cue-Nummern im Text: "Audioeinspielung Q4 Quando"
+      // wird zu "Audioeinspielung Quando". Die Nummern bleiben der Technikfassung vorbehalten.
+      if (!includeCues) {
+        temp.querySelectorAll('p, div').forEach(function (el) {
+          if (el.children.length === 0 && el.textContent && /\b[A-Z]{1,2}\s?\d+\b/.test(el.textContent)) {
+            el.textContent = el.textContent
+              .replace(/(Audioeinspielung|Einspielung|Musik|Lied)\s+(?:LX|Q|R|K)\s?\d+\s*[-–—:]?\s*/gi, '$1 ')
+              .replace(/\s{2,}/g, ' ')
+              .trim();
+          }
+        });
+      }
 
       // Striche und Ergaenzungen als Inline-Marker sichern, damit sie im Word-Export
       // nicht verloren gehen. Die Change-Spans werden zu reinen Textknoten mit
@@ -16457,6 +16455,8 @@ ${chunkText}`;
           children.push(new Paragraph({
             children: [new TextRun({ text: figurName.replace(/\s*$/, ''), bold: true, size: 20, font: 'Trebuchet MS', allCaps: true, characterSpacing: 6, color: '212121' })],
             style: 'FigurName',
+            keepNext: true,
+            keepLines: true,
             spacing: { before: 100, after: 20 }
           }));
         }
