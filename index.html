@@ -1735,7 +1735,7 @@
       let repariert = 0;
       let fehlendAudio = 0;
       for (const medium of state.medien) {
-        const istLokalesMedium = (medium.type === 'audio' || medium.type === 'video') && medium.source === 'local';
+        const istLokalesMedium = (medium.type === 'audio' || medium.type === 'video' || medium.type === 'dokument') && medium.source === 'local';
         try {
           const result = await loadAudioFromDB(medium.id);
           if (result) {
@@ -2448,6 +2448,10 @@
       probeplan: [],           // [{id, datum, zeit, ort, szeneIds[], figurIds[], typ, notizen}]
       // v3.0: UI state
       medienTab: 'audio',       // 'audio' | 'material' | 'musik'
+      materialSuche: '',        // Suchtext im Material-Reiter
+      materialTyp: 'alle',      // 'alle' | 'datei' | 'bild' | 'link' | 'text' | 'idee'
+      materialTag: '',          // aktives Schlagwort
+      materialFigur: '',        // aktive Figur
       konzeptTab: 'treatment',  // 'treatment' | 'fundament' | 'werte' | 'motive'
       teamProbenTab: 'ensemble', // 'ensemble' | 'team' | 'probeplan'
       dirty: false, // true wenn ungespeicherte Änderungen seit letztem Export/Backup
@@ -10614,14 +10618,34 @@ ${text}`;
     // ============================================
     // SZENE-MEDIEN (für Textbuch-Sidebar)
     // ============================================
+    // Recherchematerial dieser Szene (Dateien, Bilder, Links, Notizen)
+    function renderSzeneMaterialListe(liste) {
+      if (!liste || liste.length === 0) return '';
+      return `
+        <div class="space-y-1 mb-3">
+          <p class="text-xs text-gray-400 uppercase tracking-wide">Material</p>
+          ${liste.map(m => `
+            <div class="flex items-center gap-2 p-2 bg-gray-50 rounded hover:bg-gray-100">
+              <span>${m.typ === 'datei' ? dokIcon(m.roh.filename) : (MAT_ICONS[m.typ] || '📄')}</span>
+              <span class="flex-1 text-sm truncate" title="${escapeHtml(m.titel)}">${escapeHtml(m.titel || '(ohne Titel)')}</span>
+              ${m.typ === 'datei' ? `<button class="btn btn-xs btn-outline" onclick="oeffneDokument('${m.id}')">Öffnen</button>` : ''}
+              ${m.typ === 'link' && m.url ? `<button class="btn btn-xs btn-outline" onclick="window.open('${escapeHtml(m.url)}','_blank')">Öffnen</button>` : ''}
+              ${(m.typ === 'bild' || m.typ === 'text' || m.typ === 'idee') ? `<button class="btn btn-xs btn-outline" onclick="navigateTo('medien'); state.medienTab='material'; render();">Zeigen</button>` : ''}
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
     function renderSzeneMedien(szeneId) {
       if (!szeneId) {
         return '<p class="text-sm text-gray-400">Keine Szene ausgewählt</p>';
       }
       
-      const szeneMedien = state.medien.filter(m => m.szenen?.includes(szeneId));
-      
-      if (szeneMedien.length === 0) {
+      const szeneMedien = state.medien.filter(m => m.szenen?.includes(szeneId) && m.type !== 'dokument');
+      const szeneMaterial = materialListe().filter(m => (m.szeneIds || []).includes(szeneId));
+
+      if (szeneMedien.length === 0 && szeneMaterial.length === 0) {
         return `
           <p class="text-sm text-gray-400 mb-2">Keine Medien zugeordnet</p>
           <button class="btn btn-xs btn-outline w-full" onclick="navigateTo('medien')">
@@ -10630,7 +10654,7 @@ ${text}`;
         `;
       }
       
-      return `
+      return renderSzeneMaterialListe(szeneMaterial) + `
         <div class="space-y-2">
           ${szeneMedien.map(m => {
             const isPlaying = state.currentlyPlaying === m.id;
@@ -10689,8 +10713,8 @@ ${text}`;
                 🎵 Audio / Video
               </button>
               <button onclick="state.medienTab='material'; render();" 
-                class="px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === 'material' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}">
-                📎 Material
+                class="px-4 py-2 text-sm font-medium border-b-2 transition-colors ${(tab === 'material' || tab === 'dokumente') ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}">
+                📎 Material &amp; Dokumente
               </button>
               <button onclick="state.medienTab='musik'; render();" 
                 class="px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === 'musik' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}">
@@ -10702,7 +10726,7 @@ ${text}`;
           <!-- Tab Content -->
           <div class="flex-1 overflow-y-auto p-6">
             ${tab === 'audio' ? renderMedienAudioTab() : ''}
-            ${tab === 'material' ? renderMedienMaterialTab() : ''}
+            ${(tab === 'material' || tab === 'dokumente') ? renderMedienMaterialTab() : ''}
             ${tab === 'musik' ? renderMedienMusikTab() : ''}
           </div>
         </div>
@@ -10728,86 +10752,332 @@ ${text}`;
             </div>
             
             <!-- Medien Liste -->
-            ${state.medien.length === 0 ? `
+            ${(() => {
+              const av = state.medien.filter(m => m.type === 'audio' || m.type === 'video');
+              return av.length === 0 ? `
               <div class="text-center text-gray-400 py-8">
                 <p class="text-sm">Noch keine Medien – lade eine Datei hoch</p>
               </div>
             ` : `
               <div class="space-y-4">
-                ${state.medien.map(m => renderMediumCard(m)).join('')}
+                ${av.map(m => renderMediumCard(m)).join('')}
               </div>
-            `}
+            `; })()}
       `;
     }
     
+    // ============================================
+    // MATERIAL & DOKUMENTE (v6)
+    // Ein einziger Ort für Recherche: Dateien, Bilder, Links, Notizen, Ideen.
+    // Dateien liegen als state.medien(type='dokument'), der Rest in state.rechercheMaterial.
+    // Beides wird hier gemeinsam angezeigt, verschlagwortet und Szenen/Figuren zugeordnet.
+    // ============================================
+    const MAT_ICONS = { datei: '📄', bild: '📷', link: '🔗', text: '📝', idee: '💡' };
+    const MAT_LABEL = { datei: 'Datei', bild: 'Bild', link: 'Link', text: 'Notiz', idee: 'Idee' };
+
+    function materialListe() {
+      const aus_r = (state.rechercheMaterial || []).map(r => ({
+        quelle: 'r', id: r.id, typ: r.typ || 'text', roh: r,
+        titel: r.titel || '', inhalt: r.inhalt || '', url: r.url || '',
+        tags: r.tags || [], szeneIds: r.szeneIds || [], figurIds: r.figurIds || []
+      }));
+      const aus_d = (state.medien || []).filter(m => m.type === 'dokument').map(m => ({
+        quelle: 'd', id: m.id, typ: 'datei', roh: m,
+        titel: m.name || m.filename || '', inhalt: m.notizen || '', url: '',
+        tags: m.tags || [], szeneIds: m.szenen || [], figurIds: m.figurIds || []
+      }));
+      return aus_r.concat(aus_d);
+    }
+
+    function materialAlleTags() {
+      const s = new Set();
+      materialListe().forEach(m => (m.tags || []).forEach(t => { if (t) s.add(t); }));
+      return Array.from(s).sort((a, b) => a.localeCompare(b, 'de'));
+    }
+
+    function materialGefiltert() {
+      const suche = (state.materialSuche || '').trim().toLowerCase();
+      const typ = state.materialTyp || 'alle';
+      const tag = state.materialTag || '';
+      const figur = state.materialFigur || '';
+      return materialListe().filter(m => {
+        if (typ !== 'alle' && m.typ !== typ) return false;
+        if (tag && !(m.tags || []).includes(tag)) return false;
+        if (figur && !(m.figurIds || []).includes(figur)) return false;
+        if (suche) {
+          const heu = [m.titel, m.inhalt, m.url, (m.tags || []).join(' '),
+                       (m.roh && m.roh.filename) || ''].join(' ').toLowerCase();
+          if (heu.indexOf(suche) < 0) return false;
+        }
+        return true;
+      });
+    }
+
     function renderMedienMaterialTab() {
-      const items = state.rechercheMaterial || [];
+      const tags = materialAlleTags();
+      const typen = ['alle', 'datei', 'bild', 'link', 'text', 'idee'];
       return `
-        <div class="mb-4 flex gap-2 flex-wrap">
-          <button onclick="addRechercheMaterial('text')" class="btn btn-sm bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200">📝 Text</button>
+        <div id="mat-dropzone"
+             class="border-2 border-dashed border-gray-300 rounded-lg p-6 mb-4 text-center
+                    hover:border-blue-400 hover:bg-blue-50 transition-colors cursor-pointer"
+             onclick="oeffneMaterialPicker()"
+             ondragover="handleDragOver(event)"
+             ondragleave="handleDragLeave(event)"
+             ondrop="handleMaterialDrop(event)">
+          <div class="text-3xl mb-2">📎</div>
+          <p class="text-gray-600 text-sm">Datei oder Bild hierher ziehen – PDF, Word, Scan, Foto</p>
+          <p class="text-xs text-gray-400 mt-1">Wird permanent gespeichert und kommt ins ZIP-Backup</p>
+        </div>
+
+        <div class="mb-3 flex gap-2 flex-wrap">
+          <button onclick="addRechercheMaterial('text')" class="btn btn-sm bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200">📝 Notiz</button>
           <button onclick="addRechercheMaterial('idee')" class="btn btn-sm bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border border-yellow-200">💡 Idee</button>
           <button onclick="addRechercheMaterial('link')" class="btn btn-sm bg-green-50 text-green-700 hover:bg-green-100 border border-green-200">🔗 Link</button>
           <button onclick="addRechercheMaterial('bild')" class="btn btn-sm bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200">📷 Bild</button>
         </div>
-        
-        ${items.length === 0 ? `
-          <div class="text-center text-gray-400 py-12">
-            <div class="text-4xl mb-3">📎</div>
-            <p class="text-sm">Recherche-Material sammeln</p>
-            <p class="text-xs mt-1">Texte, Ideen, Links und Bilder für dein Projekt</p>
+
+        <div class="mb-3 flex gap-2 flex-wrap items-center">
+          <input type="search" id="mat-suche" value="${escapeHtml(state.materialSuche || '')}"
+                 oninput="state.materialSuche=this.value; materialListeNeu();"
+                 placeholder="Suchen in Titel, Notiz, Schlagwort, Dateiname…"
+                 class="flex-1 min-w-[220px] text-sm px-3 py-2 rounded border border-gray-300">
+          <select onchange="state.materialTyp=this.value; materialListeNeu();" class="text-sm border rounded px-2 py-2">
+            ${typen.map(t => `<option value="${t}" ${(state.materialTyp || 'alle') === t ? 'selected' : ''}>${t === 'alle' ? 'Alle Arten' : MAT_ICONS[t] + ' ' + MAT_LABEL[t]}</option>`).join('')}
+          </select>
+          <select onchange="state.materialFigur=this.value; materialListeNeu();" class="text-sm border rounded px-2 py-2">
+            <option value="">Alle Figuren</option>
+            ${state.figuren.map(f => `<option value="${f.id}" ${state.materialFigur === f.id ? 'selected' : ''}>${escapeHtml(f.name || '')}</option>`).join('')}
+          </select>
+        </div>
+
+        ${tags.length ? `
+          <div class="mb-4 flex gap-1 flex-wrap items-center">
+            <span class="text-xs text-gray-400 mr-1">Schlagwörter:</span>
+            <button onclick="state.materialTag=''; materialListeNeu();"
+              class="text-xs px-2 py-1 rounded border ${!state.materialTag ? 'bg-gray-700 text-white border-gray-700' : 'bg-white border-gray-300 text-gray-600'}">alle</button>
+            ${tags.map(t => `
+              <button onclick="state.materialTag='${escapeHtml(t).replace(/'/g, "\\'")}'; materialListeNeu();"
+                class="text-xs px-2 py-1 rounded border ${state.materialTag === t ? 'bg-gray-700 text-white border-gray-700' : 'bg-white border-gray-300 text-gray-600'}">${escapeHtml(t)}</button>
+            `).join('')}
           </div>
-        ` : `
-          <div class="space-y-3">
-            ${items.map((item, idx) => {
-              const icons = { text: '📝', idee: '💡', link: '🔗', bild: '📷' };
-              const colors = { text: 'blue', idee: 'yellow', link: 'green', bild: 'purple' };
-              const c = colors[item.typ] || 'gray';
-              return `
-                <div class="border border-${c}-200 bg-${c}-50 rounded-lg p-4">
-                  <div class="flex items-start justify-between mb-2">
-                    <div class="flex items-center gap-2">
-                      <span>${icons[item.typ] || '📄'}</span>
-                      <input type="text" value="${(item.titel || '').replace(/"/g, '&quot;')}" 
-                        onchange="updateRechercheMaterial('${item.id}', 'titel', this.value)"
-                        class="font-medium bg-transparent border-b border-transparent hover:border-${c}-300 focus:border-${c}-500 outline-none"
-                        placeholder="Titel...">
-                    </div>
-                    <button onclick="deleteRechercheMaterial('${item.id}')" class="text-gray-400 hover:text-red-500 text-sm">✕</button>
-                  </div>
-                  ${item.typ === 'link' ? `
-                    <input type="url" value="${(item.url || '').replace(/"/g, '&quot;')}" 
-                      onchange="updateRechercheMaterial('${item.id}', 'url', this.value)"
-                      class="w-full text-sm p-2 rounded border border-${c}-200 bg-white mb-2" placeholder="https://...">
-                  ` : ''}
-                  ${item.typ === 'bild' ? `
-                    ${item.bildData ? (item.bildData.startsWith('idb:')
-                      ? `<img id="recherche-img-${item.id}" class="max-h-40 rounded mb-2 cursor-pointer" onclick="openRechercheLightbox('${item.id}')" alt="Recherche-Bild">${showTitelbildAsync('recherche-img-' + item.id, item.bildData) || ''}`
-                      : `<img src="${item.bildData}" class="max-h-40 rounded mb-2 cursor-pointer" onclick="openRechercheLightbox('${item.id}')">`) : ''}
-                    <input type="file" accept="image/*" onchange="uploadRechercheBild('${item.id}', this)" class="text-xs mb-2">
-                  ` : ''}
-                  <textarea rows="2" 
-                    onchange="updateRechercheMaterial('${item.id}', 'inhalt', this.value)"
-                    class="w-full text-sm p-2 rounded border border-${c}-200 bg-white resize-y" 
-                    placeholder="Notizen...">${item.inhalt || ''}</textarea>
-                  <div class="mt-2">
-                    <select onchange="toggleRechercheSzene('${item.id}', this.value); this.value='';" 
-                      class="text-xs border rounded px-2 py-1">
-                      <option value="">+ Szene zuordnen</option>
-                      ${state.szenen.map(s => `<option value="${s.id}">${s.nummer} ${s.titel}</option>`).join('')}
-                    </select>
-                    <span class="text-xs text-gray-500 ml-2">${(item.szeneIds || []).map(sid => {
-                      const sz = state.szenen.find(s => s.id === sid);
-                      return sz ? `<span class="inline-block bg-white border rounded px-1 mr-1">${sz.nummer} <button onclick="toggleRechercheSzene('${item.id}','${sid}')" class="text-red-400 ml-1">×</button></span>` : '';
-                    }).join('')}</span>
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        `}
+        ` : ''}
+
+        <div id="material-liste">${renderMaterialListe()}</div>
       `;
     }
-    
+
+    function materialListeNeu() {
+      const el = document.getElementById('material-liste');
+      if (el) el.innerHTML = renderMaterialListe();
+      // Schlagwortleiste und Auswahlfelder nur bei Bedarf komplett neu zeichnen
+    }
+
+    function renderMaterialListe() {
+      const items = materialGefiltert();
+      const gesamt = materialListe().length;
+      if (gesamt === 0) {
+        return `
+          <div class="text-center text-gray-400 py-12">
+            <div class="text-4xl mb-3">📎</div>
+            <p class="text-sm">Material sammeln</p>
+            <p class="text-xs mt-1">Dateien, Bilder, Links, Notizen und Ideen zum Stück</p>
+          </div>`;
+      }
+      if (items.length === 0) {
+        return `<div class="text-center text-gray-400 py-10 text-sm">Nichts gefunden – Suche oder Filter anpassen.</div>`;
+      }
+      return `
+        <div class="text-xs text-gray-400 mb-2">${items.length} von ${gesamt} Einträgen</div>
+        <div class="space-y-3">
+          ${items.map(m => renderMaterialKarte(m)).join('')}
+        </div>`;
+    }
+
+    function renderMaterialKarte(m) {
+      const farben = { text: 'blue', idee: 'yellow', link: 'green', bild: 'purple', datei: 'gray' };
+      const c = farben[m.typ] || 'gray';
+      const q = m.quelle;
+      const dok = q === 'd' ? m.roh : null;
+      return `
+        <div class="border border-${c}-200 bg-${c}-50 rounded-lg p-4">
+          <div class="flex items-start justify-between mb-2 gap-2">
+            <div class="flex items-center gap-2 flex-1 min-w-0">
+              <span>${m.typ === 'datei' ? dokIcon(dok.filename) : (MAT_ICONS[m.typ] || '📄')}</span>
+              <input type="text" value="${escapeHtml(m.titel)}"
+                onchange="materialFeld('${q}','${m.id}','titel',this.value)"
+                class="flex-1 font-medium bg-transparent border-b border-transparent hover:border-${c}-300 focus:border-${c}-500 outline-none"
+                placeholder="Titel…">
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              ${m.typ === 'datei' ? `<button onclick="oeffneDokument('${m.id}')" class="btn btn-xs bg-blue-600 text-white hover:bg-blue-700">Öffnen</button>
+                                      <button onclick="dokHerunterladen('${m.id}')" class="btn btn-xs btn-outline">Sichern</button>` : ''}
+              ${m.typ === 'link' && m.url ? `<button onclick="window.open('${escapeHtml(m.url)}','_blank')" class="btn btn-xs bg-green-600 text-white hover:bg-green-700">Öffnen</button>` : ''}
+              <button onclick="materialLoeschen('${q}','${m.id}')" class="text-gray-400 hover:text-red-500 text-sm">✕</button>
+            </div>
+          </div>
+
+          ${m.typ === 'datei' ? `
+            <div class="text-xs text-gray-400 mb-2">
+              ${escapeHtml(dok.filename || '')} · ${dokGroesse(dok.groesse)}${dok.hochgeladen ? ' · ' + new Date(dok.hochgeladen).toLocaleDateString('de-CH') : ''}
+            </div>` : ''}
+
+          ${m.typ === 'link' ? `
+            <input type="url" value="${escapeHtml(m.url)}"
+              onchange="materialFeld('r','${m.id}','url',this.value)"
+              class="w-full text-sm p-2 rounded border border-${c}-200 bg-white mb-2" placeholder="https://…">` : ''}
+
+          ${m.typ === 'bild' ? `
+            ${m.roh.bildData ? (String(m.roh.bildData).startsWith('idb:')
+              ? `<img id="recherche-img-${m.id}" class="max-h-40 rounded mb-2 cursor-pointer" onclick="openRechercheLightbox('${m.id}')" alt="Recherche-Bild">${showTitelbildAsync('recherche-img-' + m.id, m.roh.bildData) || ''}`
+              : `<img src="${m.roh.bildData}" class="max-h-40 rounded mb-2 cursor-pointer" onclick="openRechercheLightbox('${m.id}')">`) : ''}
+            <input type="file" accept="image/*" onchange="uploadRechercheBild('${m.id}', this)" class="text-xs mb-2">` : ''}
+
+          <textarea rows="2"
+            onchange="materialFeld('${q}','${m.id}','inhalt',this.value)"
+            class="w-full text-sm p-2 rounded border border-${c}-200 bg-white resize-y"
+            placeholder="Notizen, Quelle, Seitenzahl…">${escapeHtml(m.inhalt)}</textarea>
+
+          <input type="text" value="${escapeHtml((m.tags || []).join(', '))}"
+            onchange="materialTags('${q}','${m.id}',this.value)"
+            class="w-full text-sm p-2 mt-2 rounded border border-${c}-200 bg-white"
+            placeholder="Schlagwörter, mit Komma getrennt – z.B. Schwarzenbach, Schlafsaal">
+
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <select onchange="materialSzene('${q}','${m.id}', this.value); this.value='';" class="text-xs border rounded px-2 py-1">
+              <option value="">+ Szene</option>
+              ${state.szenen.map(s => `<option value="${s.id}">${s.nummer} ${escapeHtml(s.titel || '')}</option>`).join('')}
+            </select>
+            ${(m.szeneIds || []).map(sid => {
+              const sz = state.szenen.find(s => s.id === sid);
+              return sz ? `<span class="text-xs inline-block bg-white border rounded px-1">${sz.nummer} <button onclick="materialSzene('${q}','${m.id}','${sid}')" class="text-red-400 ml-1">×</button></span>` : '';
+            }).join('')}
+
+            <select onchange="materialFigurZu('${q}','${m.id}', this.value); this.value='';" class="text-xs border rounded px-2 py-1">
+              <option value="">+ Figur</option>
+              ${state.figuren.map(f => `<option value="${f.id}">${escapeHtml(f.name || '')}</option>`).join('')}
+            </select>
+            ${(m.figurIds || []).map(fid => {
+              const fg = state.figuren.find(f => f.id === fid);
+              return fg ? `<span class="text-xs inline-block bg-white border rounded px-1">${escapeHtml(fg.name || '')} <button onclick="materialFigurZu('${q}','${m.id}','${fid}')" class="text-red-400 ml-1">×</button></span>` : '';
+            }).join('')}
+
+            ${m.typ === 'datei' ? `
+              <label class="text-xs text-gray-500 flex items-center gap-1 cursor-pointer ml-auto">
+                <input type="checkbox" ${m.roh.imProbeplan ? 'checked' : ''} onchange="materialFeld('d','${m.id}','imProbeplan',this.checked)">
+                im Probeplan zeigen
+              </label>` : ''}
+          </div>
+        </div>`;
+    }
+
+    function materialObjekt(quelle, id) {
+      return quelle === 'd'
+        ? (state.medien || []).find(m => m.id === id)
+        : (state.rechercheMaterial || []).find(r => r.id === id);
+    }
+
+    function materialFeld(quelle, id, feld, wert) {
+      const o = materialObjekt(quelle, id);
+      if (!o) return;
+      pushUndo();
+      if (quelle === 'd') {
+        if (feld === 'titel') o.name = wert;
+        else if (feld === 'inhalt') o.notizen = wert;
+        else o[feld] = wert;
+      } else {
+        o[feld] = wert;
+      }
+      saveProjektDaten();
+      if (feld === 'imProbeplan') materialListeNeu();
+    }
+
+    function materialTags(quelle, id, text) {
+      const o = materialObjekt(quelle, id);
+      if (!o) return;
+      pushUndo();
+      o.tags = text.split(',').map(t => t.trim()).filter(Boolean);
+      saveProjektDaten();
+      render();
+    }
+
+    function materialSzene(quelle, id, szeneId) {
+      if (!szeneId) return;
+      const o = materialObjekt(quelle, id);
+      if (!o) return;
+      pushUndo();
+      const feld = quelle === 'd' ? 'szenen' : 'szeneIds';
+      if (!o[feld]) o[feld] = [];
+      const i = o[feld].indexOf(szeneId);
+      if (i >= 0) o[feld].splice(i, 1); else o[feld].push(szeneId);
+      saveProjektDaten();
+      materialListeNeu();
+    }
+
+    function materialFigurZu(quelle, id, figurId) {
+      if (!figurId) return;
+      const o = materialObjekt(quelle, id);
+      if (!o) return;
+      pushUndo();
+      if (!o.figurIds) o.figurIds = [];
+      const i = o.figurIds.indexOf(figurId);
+      if (i >= 0) o.figurIds.splice(i, 1); else o.figurIds.push(figurId);
+      saveProjektDaten();
+      materialListeNeu();
+    }
+
+    function materialLoeschen(quelle, id) {
+      if (quelle === 'd') { loescheDokument(id); return; }
+      deleteRechercheMaterial(id);
+    }
+
+    // Datei oder Bild ins Material legen
+    let matFileInput = null;
+    function oeffneMaterialPicker() {
+      matFileInput = document.createElement('input');
+      matFileInput.type = 'file';
+      matFileInput.accept = 'image/*,.' + DOK_ENDUNGEN.join(',.');
+      matFileInput.style.display = 'none';
+      document.body.appendChild(matFileInput);
+      matFileInput.addEventListener('change', function (e) {
+        const f = e.target.files[0];
+        if (f) materialDatei(f);
+        if (matFileInput && matFileInput.parentNode) matFileInput.parentNode.removeChild(matFileInput);
+        matFileInput = null;
+      });
+      matFileInput.click();
+    }
+
+    function handleMaterialDrop(e) {
+      e.preventDefault();
+      e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
+      const f = e.dataTransfer.files[0];
+      if (f) materialDatei(f);
+    }
+
+    async function materialDatei(file) {
+      if (file.type.startsWith('image/')) {
+        pushUndo();
+        const id = genId();
+        state.rechercheMaterial.push({
+          id: id, typ: 'bild', titel: file.name.replace(/\.[^/.]+$/, ''),
+          inhalt: '', url: '', bildData: '', szeneIds: [], figurIds: [], tags: []
+        });
+        try {
+          const imgId = 'recherche_' + id;
+          await saveImageToDB(imgId, file);
+          const item = state.rechercheMaterial.find(r => r.id === id);
+          if (item) item.bildData = 'idb:' + imgId;
+        } catch (e) {
+          alert('Bild konnte nicht gespeichert werden: ' + (e.message || e));
+        }
+        saveProjektDaten();
+        render();
+        return;
+      }
+      await verarbeiteDokument(file);
+    }
+
+
     function renderMedienMusikTab() {
       const mk = state.musikkonzept || { text: '', stuecke: [] };
       return `
@@ -10879,6 +11149,7 @@ ${text}`;
         url: '',
         bildData: '',
         szeneIds: [],
+        figurIds: [],
         tags: []
       });
       saveProjektDaten();
@@ -11645,11 +11916,11 @@ ${text}`;
     
     function renderProbeplanTab() {
       const items = (state.probeplan || []).sort((a, b) => (a.datum || '').localeCompare(b.datum || ''));
-      return items.length === 0 ? `
+      return renderProbeplanDokumente() + (items.length === 0 ? `
         <div class="text-center text-gray-400 py-12">
           <div class="text-4xl mb-3">📅</div>
           <p class="text-sm">Noch kein Probeplan importiert</p>
-          <p class="text-xs mt-2">Importiere Probeplan-Daten aus dem Probeplan (Propla)<br>über <strong>Import → NINA-Exchange</strong></p>
+          <p class="text-xs mt-2">Importiere Probeplan-Daten aus dem Probeplan (Propla)<br>über <strong>Import → NINA-Exchange</strong><br>oder lege den Ablaufplan oben als Dokument ab</p>
         </div>
       ` : `
         <div class="space-y-2">
@@ -11660,19 +11931,22 @@ ${text}`;
               return sz ? sz.nummer : '';
             }).filter(Boolean).join(', ');
             return `
-              <div class="border border-teal-200 bg-teal-50 rounded-lg p-3 flex items-center gap-4">
-                <div class="text-sm font-medium w-32">${datum}</div>
-                <div class="text-sm text-gray-600">${p.zeit || ''}</div>
-                <div class="text-sm flex-1">
-                  ${p.ort ? `<span class="text-gray-500">📍 ${p.ort}</span>` : ''}
-                  ${szenen ? `<span class="ml-2 text-teal-600">🎬 ${szenen}</span>` : ''}
+              <div class="border border-teal-200 bg-teal-50 rounded-lg p-3">
+                <div class="flex items-center gap-4">
+                  <div class="text-sm font-medium w-32">${datum}</div>
+                  <div class="text-sm text-gray-600">${p.zeit || ''}</div>
+                  <div class="text-sm flex-1">
+                    ${p.ort ? `<span class="text-gray-500">📍 ${p.ort}</span>` : ''}
+                    ${szenen ? `<span class="ml-2 text-teal-600">🎬 ${szenen}</span>` : ''}
+                  </div>
+                  ${p.typ ? `<span class="text-xs bg-teal-200 text-teal-800 px-2 py-0.5 rounded">${p.typ}</span>` : ''}
                 </div>
-                ${p.typ ? `<span class="text-xs bg-teal-200 text-teal-800 px-2 py-0.5 rounded">${p.typ}</span>` : ''}
+                ${p.notizen ? `<div class="mt-2 pt-2 border-t border-teal-200 text-xs text-gray-600" style="white-space:pre-wrap;">${escapeHtml(p.notizen)}</div>` : ''}
               </div>
             `;
           }).join('')}
         </div>
-      `; 
+      `); 
     }
     
     // Speicherinfo im Header aktualisieren
@@ -11696,6 +11970,283 @@ ${text}`;
       }
     }
     
+    // ============================================
+    // DOKUMENTE (v5) – PDF & Co. ablegen und in Rebu öffnen
+    // Dokumente sind ganz normale Einträge in state.medien mit type='dokument'.
+    // Damit landen sie automatisch im ZIP-Backup und kommen beim Import zurück.
+    // ============================================
+    const DOK_ENDUNGEN = ['pdf','doc','docx','odt','rtf','txt','md','xls','xlsx','ods','csv','ppt','pptx','odp','pages','numbers','key','zip'];
+
+    function dokGroesse(bytes) {
+      if (!bytes && bytes !== 0) return '';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function dokIcon(name) {
+      const ext = (name || '').split('.').pop().toLowerCase();
+      if (ext === 'pdf') return '📕';
+      if (['doc','docx','odt','rtf','pages'].includes(ext)) return '📘';
+      if (['xls','xlsx','ods','csv','numbers'].includes(ext)) return '📗';
+      if (['ppt','pptx','odp','key'].includes(ext)) return '📙';
+      if (['txt','md'].includes(ext)) return '📄';
+      if (ext === 'zip') return '🗜️';
+      return '📄';
+    }
+
+    function istPdf(medium) {
+      return /\.pdf$/i.test(medium.filename || '') || medium.mimeTyp === 'application/pdf';
+    }
+
+    function renderMedienDokumenteTab() {
+      const docs = state.medien.filter(m => m.type === 'dokument');
+      return `
+        <div id="dok-dropzone"
+             class="border-2 border-dashed border-gray-300 rounded-lg p-8 mb-6 text-center
+                    hover:border-blue-400 hover:bg-blue-50 transition-colors cursor-pointer"
+             onclick="oeffneDokumentPicker()"
+             ondragover="handleDragOver(event)"
+             ondragleave="handleDragLeave(event)"
+             ondrop="handleDokumentDrop(event)">
+          <div class="text-4xl mb-3">📄</div>
+          <p class="text-gray-600 mb-2">Dokument hierher ziehen oder klicken</p>
+          <p class="text-sm text-gray-400">PDF, Word, Excel, Text – wird permanent gespeichert und ins ZIP-Backup übernommen</p>
+        </div>
+
+        ${docs.length === 0 ? `
+          <div class="text-center text-gray-400 py-8">
+            <p class="text-sm">Noch keine Dokumente – z.B. Ablaufplan, Vertrag, Bühnenplan</p>
+          </div>
+        ` : `
+          <div class="space-y-3">
+            ${docs.map(m => `
+              <div class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                <div class="flex items-start gap-4">
+                  <div class="text-3xl">${dokIcon(m.filename)}</div>
+                  <div class="flex-1 min-w-0 space-y-2">
+                    <input type="text" value="${escapeHtml(m.name || '')}"
+                           onchange="dokFeld('${m.id}','name',this.value)"
+                           class="w-full font-medium text-gray-900 border-0 border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:outline-none px-0 py-1">
+                    <div class="text-xs text-gray-400">
+                      ${escapeHtml(m.filename || '')} · ${dokGroesse(m.groesse)}${m.hochgeladen ? ' · ' + new Date(m.hochgeladen).toLocaleDateString('de-CH') : ''}
+                      ${m.dateiFehlt ? ' · <span class="text-amber-600">⚠️ Datei fehlt im Speicher</span>' : ''}
+                    </div>
+                    <input type="text" value="${escapeHtml(m.notizen || '')}" placeholder="Notiz"
+                           onchange="dokFeld('${m.id}','notizen',this.value)"
+                           class="w-full text-sm text-gray-600 border-0 border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:outline-none px-0 py-1">
+                    <label class="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
+                      <input type="checkbox" ${m.imProbeplan ? 'checked' : ''}
+                             onchange="dokFeld('${m.id}','imProbeplan',this.checked)">
+                      Auch unter «Team &amp; Proben → Probeplan» anzeigen
+                    </label>
+                  </div>
+                  <div class="flex flex-col gap-2 flex-shrink-0">
+                    <button class="btn btn-sm bg-blue-600 text-white hover:bg-blue-700" onclick="oeffneDokument('${m.id}')">Öffnen</button>
+                    <button class="btn btn-sm btn-outline" onclick="dokHerunterladen('${m.id}')">Sichern</button>
+                    <button class="btn btn-sm text-red-600 hover:bg-red-50" onclick="loescheDokument('${m.id}')">Löschen</button>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      `;
+    }
+
+    let dokFileInput = null;
+
+    function oeffneDokumentPicker() {
+      dokFileInput = document.createElement('input');
+      dokFileInput.type = 'file';
+      dokFileInput.accept = '.' + DOK_ENDUNGEN.join(',.') + ',application/pdf';
+      dokFileInput.style.display = 'none';
+      document.body.appendChild(dokFileInput);
+      dokFileInput.addEventListener('change', function (e) {
+        const file = e.target.files[0];
+        if (file) verarbeiteDokument(file);
+        if (dokFileInput && dokFileInput.parentNode) dokFileInput.parentNode.removeChild(dokFileInput);
+        dokFileInput = null;
+      });
+      dokFileInput.click();
+    }
+
+    function handleDokumentDrop(e) {
+      e.preventDefault();
+      e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
+      const file = e.dataTransfer.files[0];
+      if (file) verarbeiteDokument(file);
+    }
+
+    async function verarbeiteDokument(file, imProbeplan) {
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      if (!DOK_ENDUNGEN.includes(ext) && !file.type.startsWith('application/') && !file.type.startsWith('text/')) {
+        alert('Das sieht nicht nach einem Dokument aus.\nMöglich sind PDF, Word, Excel, PowerPoint, Text und ZIP.');
+        return;
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        if (!confirm('Die Datei ist ' + dokGroesse(file.size) + ' gross. Sie landet in jedem ZIP-Backup und macht es entsprechend schwer.\n\nTrotzdem ablegen?')) return;
+      }
+
+      pushUndo();
+      const dokId = 'dok_' + Date.now();
+      const medium = {
+        id: dokId,
+        name: file.name.replace(/\.[^/.]+$/, ''),
+        source: 'local',
+        url: '',
+        filename: file.name,
+        localFileUrl: createTrackedObjectURL(file),
+        type: 'dokument',
+        mimeTyp: file.type || '',
+        groesse: file.size,
+        hochgeladen: new Date().toISOString(),
+        imProbeplan: !!imProbeplan,
+        szenen: [],
+        notizen: '',
+        audioStored: false
+      };
+
+      try {
+        await saveAudioToDB(dokId, file);
+        medium.audioStored = true;
+      } catch (e) {
+        console.error('Dokument-Speicherung fehlgeschlagen:', e);
+        alert('Das Dokument konnte nicht dauerhaft gespeichert werden und ist nach einem Neuladen weg.\n(' + (e.message || e) + ')');
+      }
+
+      state.medien.push(medium);
+      saveProjektDaten();
+      render();
+      updateStorageInfo();
+    }
+
+    function dokFeld(id, feld, wert) {
+      const m = state.medien.find(x => x.id === id);
+      if (!m) return;
+      pushUndo();
+      m[feld] = wert;
+      saveProjektDaten();
+      if (feld === 'imProbeplan') render();
+    }
+
+    async function dokUrl(id) {
+      const m = state.medien.find(x => x.id === id);
+      if (!m) return null;
+      if (m.localFileUrl) return m.localFileUrl;
+      try {
+        const result = await loadAudioFromDB(id);
+        if (result && result.url) { m.localFileUrl = result.url; return result.url; }
+      } catch (e) { console.warn('Dokument nicht ladbar:', e); }
+      m.dateiFehlt = true;
+      return null;
+    }
+
+    async function oeffneDokument(id) {
+      const m = state.medien.find(x => x.id === id);
+      const url = await dokUrl(id);
+      if (!url) {
+        alert('Diese Datei steckt nicht mehr im Speicher.\nSie kommt zurück, wenn du das vollständige ZIP-Backup öffnest.');
+        render();
+        return;
+      }
+      if (istPdf(m)) {
+        zeigeDokumentAnsicht(m, url);
+      } else {
+        window.open(url, '_blank');
+      }
+    }
+
+    function zeigeDokumentAnsicht(m, url) {
+      schliesseDokumentAnsicht();
+      const ov = document.createElement('div');
+      ov.id = 'dok-overlay';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(17,24,39,0.85);display:flex;flex-direction:column;';
+      const kopf = document.createElement('div');
+      kopf.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 16px;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;';
+      const titel = document.createElement('span');
+      titel.style.flex = '1';
+      titel.textContent = '📕 ' + (m.name || m.filename || 'Dokument');
+      const bTab = document.createElement('button');
+      bTab.textContent = 'In neuem Tab';
+      bTab.style.cssText = 'background:#fff;color:#1f2937;border:none;border-radius:4px;padding:6px 12px;font-weight:600;cursor:pointer;';
+      bTab.onclick = function () { window.open(url, '_blank'); };
+      const bZu = document.createElement('button');
+      bZu.textContent = 'Schliessen';
+      bZu.style.cssText = 'background:#374151;color:#fff;border:none;border-radius:4px;padding:6px 12px;font-weight:600;cursor:pointer;';
+      bZu.onclick = schliesseDokumentAnsicht;
+      kopf.appendChild(titel); kopf.appendChild(bTab); kopf.appendChild(bZu);
+      const rahmen = document.createElement('iframe');
+      rahmen.src = url;
+      rahmen.style.cssText = 'flex:1;width:100%;border:none;background:#fff;';
+      ov.appendChild(kopf); ov.appendChild(rahmen);
+      ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') schliesseDokumentAnsicht(); });
+      document.body.appendChild(ov);
+      ov.tabIndex = -1; ov.focus();
+    }
+
+    function schliesseDokumentAnsicht() {
+      const alt = document.getElementById('dok-overlay');
+      if (alt) alt.remove();
+    }
+
+    async function dokHerunterladen(id) {
+      const m = state.medien.find(x => x.id === id);
+      const url = await dokUrl(id);
+      if (!url) { alert('Diese Datei steckt nicht mehr im Speicher.'); render(); return; }
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = m.filename || (m.name + '.pdf');
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    async function loescheDokument(id) {
+      const m = state.medien.find(x => x.id === id);
+      if (!m) return;
+      if (!confirm('«' + (m.name || m.filename) + '» wirklich löschen?')) return;
+      pushUndo();
+      try { await deleteAudioFromDB(id); } catch (e) {}
+      state.medien = state.medien.filter(x => x.id !== id);
+      saveProjektDaten();
+      render();
+      updateStorageInfo();
+    }
+
+    // Dokumentleiste im Probeplan
+    function renderProbeplanDokumente() {
+      const docs = state.medien.filter(m => m.type === 'dokument' && m.imProbeplan);
+      return `
+        <div class="mb-4 flex items-center gap-2 flex-wrap">
+          ${docs.map(m => `
+            <button onclick="oeffneDokument('${m.id}')"
+              class="btn btn-sm bg-white border border-teal-200 text-teal-700 hover:bg-teal-50">
+              ${dokIcon(m.filename)} ${escapeHtml(m.name || m.filename)}
+            </button>
+          `).join('')}
+          <button onclick="oeffneProbeplanDokumentPicker()" class="btn btn-sm btn-outline">📄 Dokument ablegen</button>
+        </div>
+      `;
+    }
+
+    let probeplanFileInput = null;
+
+    function oeffneProbeplanDokumentPicker() {
+      probeplanFileInput = document.createElement('input');
+      probeplanFileInput.type = 'file';
+      probeplanFileInput.accept = '.' + DOK_ENDUNGEN.join(',.') + ',application/pdf';
+      probeplanFileInput.style.display = 'none';
+      document.body.appendChild(probeplanFileInput);
+      probeplanFileInput.addEventListener('change', function (e) {
+        const file = e.target.files[0];
+        if (file) verarbeiteDokument(file, true);
+        if (probeplanFileInput && probeplanFileInput.parentNode) probeplanFileInput.parentNode.removeChild(probeplanFileInput);
+        probeplanFileInput = null;
+      });
+      probeplanFileInput.click();
+    }
+
     // File Picker - global reference to prevent garbage collection
     let globalFileInput = null;
     
