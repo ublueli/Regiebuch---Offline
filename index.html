@@ -16095,7 +16095,7 @@ ${chunkText}`;
           state.figuren.forEach(f => {
             const nameRuns = [new TextRun({ text: f.name.toUpperCase(), bold: true, size: 20, font: 'Trebuchet MS', color: '212121' })];
             if (f.kuerzel) nameRuns.push(new TextRun({ text: ' (' + f.kuerzel + ')', size: 20, font: 'Trebuchet MS', color: '212121' }));
-            children.push(new Paragraph({ children: nameRuns, spacing: { before: 120, after: 20 } }));
+            children.push(new Paragraph({ children: nameRuns, spacing: { before: 120, after: 20 }, keepNext: true }));
             if (f.beschreibung) {
               children.push(new Paragraph({
                 children: [new TextRun({ text: f.beschreibung, size: 20, font: 'Georgia', italics: true, color: '555555' })],
@@ -16109,6 +16109,7 @@ ${chunkText}`;
         }
         
         // === SZENEN-UEBERSICHT ===
+        children.push(new Paragraph({ children: [new PageBreak()] }));
         children.push(new Paragraph({
           children: [new TextRun({ text: 'SZENENÜBERSICHT', bold: true, size: 22, font: 'Trebuchet MS', allCaps: true, characterSpacing: 24, color: '212121' })],
           alignment: AlignmentType.CENTER,
@@ -16126,7 +16127,7 @@ ${chunkText}`;
           if (szene.ort || szene.zeit) {
             headerRuns.push(new TextRun({ text: '  –  ' + [szene.ort, szene.zeit].filter(Boolean).join(' / '), size: 18, color: '888888', font: 'Trebuchet MS', italics: true }));
           }
-          children.push(new Paragraph({ children: headerRuns, spacing: { before: 100, after: 20 } }));
+          children.push(new Paragraph({ children: headerRuns, spacing: { before: 120, after: 20 }, keepNext: true }));
           
           if (figurenNamen) {
             children.push(new Paragraph({
@@ -16239,7 +16240,7 @@ ${chunkText}`;
               paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 600, after: 240 } } },
             { id: 'SzenenTitel', name: 'Szenen-Titel', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Georgia', bold: true, size: 24, color: '212121' }, 
-              paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 240, after: 100 }, keepNext: true } },
+              paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 800, after: 100 }, keepNext: true } },
             { id: 'OrtZeit', name: 'Ort-Zeit', basedOn: 'Normal', next: 'Normal',
               run: { font: 'Trebuchet MS', bold: true, italics: true, size: 18, color: '757575' },
               paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 40, after: 100 }, keepNext: true, 
@@ -16308,7 +16309,7 @@ ${chunkText}`;
       children.push(new Paragraph({
         children: [new TextRun({ text: szene.nummer + ' ' + szene.titel, bold: true, size: 24, font: 'Georgia', color: '212121' })],
         alignment: AlignmentType.CENTER,
-        spacing: { before: 240, after: 100 },
+        spacing: { before: 800, after: 100 },
         keepNext: true,
         style: 'SzenenTitel'
       }));
@@ -16319,6 +16320,7 @@ ${chunkText}`;
             text: [szene.ort ? 'Ort: ' + szene.ort : '', szene.zeit ? 'Zeit: ' + szene.zeit : ''].filter(Boolean).join(' \u00B7 '),
             bold: true, italics: true, size: 18, color: '757575', font: 'Trebuchet MS'
           })],
+          style: 'OrtZeit',
           alignment: AlignmentType.CENTER,
           spacing: { before: 40, after: 100 },
           keepNext: true,
