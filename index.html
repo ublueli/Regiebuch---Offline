@@ -15968,7 +15968,7 @@ ${chunkText}`;
       
       const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, 
               WidthType, AlignmentType, HeadingLevel, BorderStyle, 
-              PageBreak, Header, Footer, ImageRun } = docx;
+              PageBreak, Header, Footer, ImageRun, PageNumber } = docx;
       
       const children = [];
       
@@ -16278,6 +16278,9 @@ ${chunkText}`;
                   new TextRun({ text: '\u00ABdramera\u00BB', font: 'Trebuchet MS', size: 15, italics: true, color: 'AAAAAA' }),
                   new TextRun({ text: '\t' + (meta.titel || '') + '\t', font: 'Trebuchet MS', size: 15, color: 'AAAAAA' }),
                   new TextRun({ text: 'Seite ', font: 'Trebuchet MS', size: 15, color: 'AAAAAA' }),
+                  new TextRun({ children: [PageNumber.CURRENT], font: 'Trebuchet MS', size: 15, color: 'AAAAAA' }),
+                  new TextRun({ text: ' von ', font: 'Trebuchet MS', size: 15, color: 'AAAAAA' }),
+                  new TextRun({ children: [PageNumber.TOTAL_PAGES], font: 'Trebuchet MS', size: 15, color: 'AAAAAA' }),
                 ],
                 border: { top: { style: BorderStyle.SINGLE, size: 2, color: 'CCCCCC', space: 4 } }
               })]
@@ -16349,13 +16352,15 @@ ${chunkText}`;
       // In der Spielfassung stehen keine Cue-Nummern im Text: "Audioeinspielung Q4 Quando"
       // wird zu "Audioeinspielung Quando". Die Nummern bleiben der Technikfassung vorbehalten.
       if (!includeCues) {
+        var CUE_IM_TEXT = /(Audioeinspielung|Einspielung|Musik|Lied)\s+(?:LX|Q|R|K)\s?\d+/i;
         temp.querySelectorAll('p, div').forEach(function (el) {
-          if (el.children.length === 0 && el.textContent && /\b[A-Z]{1,2}\s?\d+\b/.test(el.textContent)) {
-            el.textContent = el.textContent
-              .replace(/(Audioeinspielung|Einspielung|Musik|Lied)\s+(?:LX|Q|R|K)\s?\d+\s*[-–—:]?\s*/gi, '$1 ')
-              .replace(/\s{2,}/g, ' ')
-              .trim();
-          }
+          if (el.querySelector('p, div')) return;          // nur die unterste Ebene
+          var t = el.textContent || '';
+          if (!CUE_IM_TEXT.test(t)) return;
+          el.textContent = t
+            .replace(/((?:Audioeinspielung|Einspielung|Musik|Lied))\s+(?:LX|Q|R|K)\s?\d+\s*[-–—:]?\s*/gi, '$1 ')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
         });
       }
 
@@ -16687,7 +16692,14 @@ ${chunkText}`;
         
         if (node.nodeType !== Node.ELEMENT_NODE) return;
         if (node.tagName === 'BR') return;
-        if (!node.textContent.trim()) return;
+        if (!node.textContent.trim()) {
+          // Leerzeile in Lied oder Vers = Strophenabstand, den behalten wir.
+          var leerFormat = getFormat(node);
+          if (leerFormat === 'Lied' || leerFormat === 'Vers') {
+            children.push(new Paragraph({ style: leerFormat, spacing: { before: 0, after: 0 }, children: [] }));
+          }
+          return;
+        }
         
         var format = getFormat(node);
         
