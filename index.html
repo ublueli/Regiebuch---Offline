@@ -1316,6 +1316,12 @@
       if (error) { alert('Anmeldung fehlgeschlagen. Adresse oder Codewort stimmt nicht.'); return; }
 
       cloudUser = data.user;
+      // Felder leeren, bevor das Fenster verschwindet: sonst traegt Chrome die
+      // Anmeldedaten spaeter in irgendein anderes Eingabefeld der App ein.
+      const f1 = document.getElementById('cloud_email');
+      const f2 = document.getElementById('cloud_codewort');
+      if (f1) f1.value = '';
+      if (f2) f2.value = '';
       state.showCloudModal = false;
       render();
       showFormatToast('☁️ Angemeldet als ' + cloudUser.email);
@@ -1572,14 +1578,17 @@
               <p class="text-sm text-gray-600 mb-4">
                 ${zweck} Adresse und Codewort bekommst du von der Regie.
               </p>
-              <label class="block text-sm font-medium mb-1">Adresse</label>
-              <input id="cloud_email" type="email" class="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-3"
-                     autocomplete="username" placeholder="produktion@ueliblum.ch">
-              <label class="block text-sm font-medium mb-1">Codewort</label>
-              <input id="cloud_codewort" type="password" class="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-4"
-                     autocomplete="current-password"
-                     onkeydown="if(event.key==='Enter'){event.preventDefault();cloudLogin();}">
-              <button class="btn btn-primary w-full" onclick="cloudLogin()">Anmelden</button>
+              <form id="cloud_form" onsubmit="event.preventDefault(); cloudLogin(); return false;">
+                <label class="block text-sm font-medium mb-1" for="cloud_email">Adresse</label>
+                <input id="cloud_email" name="cloud_email" type="email"
+                       class="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-3"
+                       autocomplete="username" placeholder="produktion@ueliblum.ch">
+                <label class="block text-sm font-medium mb-1" for="cloud_codewort">Codewort</label>
+                <input id="cloud_codewort" name="cloud_codewort" type="password"
+                       class="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-4"
+                       autocomplete="current-password">
+                <button type="submit" class="btn btn-primary w-full">Anmelden</button>
+              </form>
             </div>
           </div>
         </div>
@@ -19368,8 +19377,14 @@ ${chunkText}`;
       if (callback) callback();
     }
 
-    // «An neuem Ort speichern…» – vergisst den gemerkten Speicherort und fragt neu
+    // «An neuem Ort speichern…» – fragt zuerst, wohin: Festplatte oder Cloud
     function sichernAnNeuemOrt() {
+      state.showSichernUnterModal = true;
+      render();
+    }
+
+    // Festplatte: gemerkten Speicherort vergessen und neu fragen
+    function sichernAufFestplatte() {
       savedFileHandle = null;
       sichernProjekt();
     }
@@ -19564,12 +19579,12 @@ ${chunkText}`;
               <p class="text-sm text-gray-600 mb-4">Wähle, wo du dein Projekt sichern möchtest:</p>
               
               <!-- Als Datei -->
-              <div class="border-2 border-green-200 rounded-lg p-4 mb-3 bg-green-50 hover:bg-green-100 cursor-pointer transition-colors" onclick="closeModal('showSichernUnterModal'); sichernUnter()">
+              <div class="border-2 border-green-200 rounded-lg p-4 mb-3 bg-green-50 hover:bg-green-100 cursor-pointer transition-colors" onclick="closeModal('showSichernUnterModal'); sichernAufFestplatte()">
                 <div class="flex items-center gap-3">
                   <span class="text-2xl">💾</span>
                   <div class="flex-1">
-                    <p class="font-medium text-green-800 text-sm">Neuen Speicherort wählen</p>
-                    <p class="text-xs text-green-700">Projektdatei (.json) mit Datum/Zeit im Namen</p>
+                    <p class="font-medium text-green-800 text-sm">Auf der Festplatte speichern</p>
+                    <p class="text-xs text-green-700">Sicherungskopie (.zip) mit allen Medien · Speicherort frei wählbar</p>
                   </div>
                 </div>
               </div>
