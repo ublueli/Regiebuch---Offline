@@ -1333,6 +1333,22 @@
       }
     }
 
+    // Produktion wechseln: abmelden, dann Anmeldefenster fuer das naechste Konto.
+    // Die vorgemerkte Aktion laeuft nach der Anmeldung von selbst weiter.
+    async function cloudProduktionWechseln(aktion) {
+      if (!db) return;
+      if (state.dirty) {
+        if (!confirm('Es gibt Änderungen, die noch nicht gesichert sind.\n\n' +
+                     'Beim Wechsel der Produktion gehen sie verloren. Trotzdem wechseln?')) return;
+      }
+      await db.auth.signOut();
+      cloudUser = null;
+      cloudZeitstempel = null;
+      cloudNachAnmeldung = aktion || null;
+      state.showCloudModal = true;
+      render();
+    }
+
     // Fuehrt eine Cloud-Aktion aus. Ist niemand angemeldet, kommt zuerst das
     // Anmeldefenster; nach erfolgreicher Anmeldung laeuft die Aktion von selbst.
     function cloudMitAnmeldung(aktion) {
@@ -1490,9 +1506,12 @@
       if (!data || !data.length) { alert('In der Cloud liegt noch kein Regiebuch.'); return; }
 
       const wann = new Date(data[0].geaendert_am).toLocaleString('de-CH');
+      const warnung = state.dirty
+        ? '\n\n⚠️ Im Browser gibt es Änderungen, die noch nicht gesichert sind. Sie gehen verloren.'
+        : '';
       if (!confirm('Regiebuch «' + (data[0].titel || 'Ohne Titel') + '» aus der Cloud laden?\n' +
                    'Stand: ' + wann + '\n\n' +
-                   'Der aktuelle Inhalt im Browser wird ersetzt.')) return;
+                   'Der aktuelle Inhalt im Browser wird ersetzt.' + warnung)) return;
 
       cloudBusy = true;
       try {
@@ -19443,6 +19462,15 @@ ${chunkText}`;
                 </div>
               </div>
 
+              ${cloudUser ? `
+                <p class="text-xs text-gray-500 mb-4 text-right">
+                  <span class="text-blue-600 cursor-pointer hover:underline"
+                        onclick="event.stopPropagation(); closeModal('showOeffnenModal'); cloudProduktionWechseln(cloudLaden)">
+                    ↔ andere Produktion öffnen
+                  </span>
+                </p>
+              ` : ''}
+
               <!-- Von Datei öffnen -->
               <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-blue-400 cursor-pointer mb-4"
                    onclick="oeffnenVonDatei()">
@@ -19608,6 +19636,8 @@ ${chunkText}`;
               ${cloudUser ? `
                 <p class="text-xs text-gray-400 mb-2 text-right">
                   Angemeldet als ${escapeHtml(cloudUser.email)} ·
+                  <span class="text-blue-600 cursor-pointer hover:underline"
+                        onclick="closeModal('showSichernUnterModal'); cloudProduktionWechseln(cloudSpeichern)">andere Produktion</span> ·
                   <span class="text-blue-600 cursor-pointer hover:underline" onclick="closeModal('showSichernUnterModal'); cloudLogout()">abmelden</span>
                 </p>
               ` : ''}
