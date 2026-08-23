@@ -3328,29 +3328,82 @@
       
       if (!projektId || projekte.length === 0) {
         projektId = genId();
-        const neuProjekt = { id: projektId, name: 'Demo-Projekt', erstellt: new Date().toISOString() };
+        const neuProjekt = { id: projektId, name: 'Neues Projekt', erstellt: new Date().toISOString() };
         save(KEYS.projekte, [neuProjekt]);
         save(KEYS.aktuellesProjekt, projektId);
         
-        // Demo-Figuren
-        const demoFiguren = [
-          { id: genId(), name: 'MARTHE', kuerzel: 'MA', beschreibung: 'Die Marketenderin', want: 'Überleben', need: 'Liebe' },
-          { id: genId(), name: 'MELK', kuerzel: 'ME', beschreibung: 'Ein Köhlerjunge', want: 'Das Geheimnis finden', need: 'Zugehörigkeit' },
-          { id: genId(), name: 'GRIT', kuerzel: 'GR', beschreibung: 'Magd im Gasthaus', want: 'Freiheit', need: 'Anerkennung' },
-        ];
-        save(KEYS.figuren(projektId), demoFiguren);
-        
-        // Demo-Szenen
-        const demoSzenen = [
-          { id: genId(), nummer: '1.1', titel: 'Prolog', ort: 'Marktplatz', zeit: 'Morgen', figuren: [demoFiguren[0].id], gruppe: '1', zusammenfassung: 'Marthe beginnt ihren Tag. Wir ahnen, dass etwas nicht stimmt.' },
-          { id: genId(), nummer: '1.2', titel: 'Die Ankunft', ort: 'Dorfplatz', zeit: 'Mittag', figuren: [demoFiguren[0].id, demoFiguren[1].id], gruppe: '1', zusammenfassung: 'Melk kommt an. Marthe scheint ihn erwartet zu haben.' },
-          { id: genId(), nummer: '2.1', titel: 'Im Gasthaus', ort: 'Gasthaus zum Sternen', zeit: 'Abend', figuren: [demoFiguren[1].id, demoFiguren[2].id], gruppe: '2', zusammenfassung: 'Melk trifft auf Grit. Ein Geheimnis wird angedeutet.' },
-        ];
-        save(KEYS.szenen(projektId), demoSzenen);
-        
-        // v1.2: Demo-Textbuch mit neuem Dialog-Format (Grid)
-        const demoTextbuch = {};
-        demoTextbuch[demoSzenen[0].id] = `<p class="format-szene-titel">1.1 Prolog</p>
+        // Leeres Projekt: kein Musterinhalt. Wer Rebu zum ersten Mal oeffnet,
+        // soll ein leeres Buch sehen und gleich sein eigenes laden koennen.
+        save(KEYS.figuren(projektId), []);
+        save(KEYS.szenen(projektId), []);
+        save(KEYS.textbuch(projektId), {});
+        save(KEYS.cues(projektId), []);
+        save(KEYS.kostueme(projektId), []);
+
+        const meta = {
+          titel: 'Neues Projekt',
+          untertitel: '',
+          autor: '',
+          tagline: '',
+          logline: '',
+          fassung: 'Arbeitsfassung',
+          fassungsDatum: new Date().toISOString(),
+          eigeneGruppen: ['Erster Akt']
+        };
+        save(KEYS.projektMeta(projektId), meta);
+
+        // Beim allerersten Start das Oeffnen-Fenster zeigen, damit man
+        // nicht vor einem leeren Buch sitzt und nicht weiss, wie weiter.
+        state.showOeffnenModal = true;
+      }
+      
+      state.projektId = projektId || projekte[0]?.id;
+      loadProjektDaten();
+    }
+
+    // ============================================
+    // MUSTERPROJEKT
+    // ============================================
+    // Wird nicht mehr automatisch angelegt, sondern nur auf Klick im
+    // Oeffnen-Fenster. So startet Rebu leer, laesst sich aber weiterhin
+    // ohne eigene Daten vorfuehren.
+    function musterprojektLaden() {
+      if (!confirm('Musterprojekt «Brandboden» anlegen?\n\n' +
+                   'Es dient zum Ausprobieren und wird als eigenes Projekt angelegt. ' +
+                   'Dein aktuelles Projekt bleibt erhalten.')) return;
+
+      // Aktuellen Stand sichern, bevor gewechselt wird
+      if (state.projektId) {
+        saveCurrentText(true);
+        flushPendingSave();
+        saveProjektDaten();
+      }
+
+      const projektId = genId();
+      const projekte = load(KEYS.projekte, []);
+      projekte.push({ id: projektId, name: 'Brandboden', erstellt: new Date().toISOString() });
+      save(KEYS.projekte, projekte);
+      save(KEYS.aktuellesProjekt, projektId);
+
+      // Demo-Figuren
+      const demoFiguren = [
+        { id: genId(), name: 'MARTHE', kuerzel: 'MA', beschreibung: 'Die Marketenderin', want: 'Überleben', need: 'Liebe' },
+        { id: genId(), name: 'MELK', kuerzel: 'ME', beschreibung: 'Ein Köhlerjunge', want: 'Das Geheimnis finden', need: 'Zugehörigkeit' },
+        { id: genId(), name: 'GRIT', kuerzel: 'GR', beschreibung: 'Magd im Gasthaus', want: 'Freiheit', need: 'Anerkennung' },
+      ];
+      save(KEYS.figuren(projektId), demoFiguren);
+      
+      // Demo-Szenen
+      const demoSzenen = [
+        { id: genId(), nummer: '1.1', titel: 'Prolog', ort: 'Marktplatz', zeit: 'Morgen', figuren: [demoFiguren[0].id], gruppe: '1', zusammenfassung: 'Marthe beginnt ihren Tag. Wir ahnen, dass etwas nicht stimmt.' },
+        { id: genId(), nummer: '1.2', titel: 'Die Ankunft', ort: 'Dorfplatz', zeit: 'Mittag', figuren: [demoFiguren[0].id, demoFiguren[1].id], gruppe: '1', zusammenfassung: 'Melk kommt an. Marthe scheint ihn erwartet zu haben.' },
+        { id: genId(), nummer: '2.1', titel: 'Im Gasthaus', ort: 'Gasthaus zum Sternen', zeit: 'Abend', figuren: [demoFiguren[1].id, demoFiguren[2].id], gruppe: '2', zusammenfassung: 'Melk trifft auf Grit. Ein Geheimnis wird angedeutet.' },
+      ];
+      save(KEYS.szenen(projektId), demoSzenen);
+      
+      // v1.2: Demo-Textbuch mit neuem Dialog-Format (Grid)
+      const demoTextbuch = {};
+      demoTextbuch[demoSzenen[0].id] = `<p class="format-szene-titel">1.1 Prolog</p>
 <p class="format-regieanweisung">(Der Marktplatz bei Sonnenaufgang. Nebel hängt über dem Dorf. MARTHE tritt langsam auf, einen Korb tragend.)</p>
 <div class="format-dialog"><span class="figur-name">MARTHE:</span><span class="dialog-text">(leise) So früh schon wach, und doch zu spät. Die Welt dreht sich, ob ich will oder nicht.</span></div>
 <p class="format-regieanweisung">(Sie stellt den Korb ab und blickt zum Himmel.)</p>
@@ -3361,7 +3414,7 @@ Was gestern war, ist längst vorbei,
 was morgen kommt – wer ist dabei?</p>
 <p class="format-regieanweisung">(MARTHE nimmt den Korb wieder auf und geht langsam ab.)</p>`;
 
-        demoTextbuch[demoSzenen[1].id] = `<p class="format-szene-titel">1.2 Die Ankunft</p>
+      demoTextbuch[demoSzenen[1].id] = `<p class="format-szene-titel">1.2 Die Ankunft</p>
 <p class="format-regieanweisung">(Dorfplatz. MARTHE wartet. MELK kommt von rechts, verstaubt und erschöpft.)</p>
 <div class="format-dialog"><span class="figur-name">MARTHE:</span><span class="dialog-text">Da bist du ja. Ich hab dich erwartet.</span></div>
 <div class="format-dialog"><span class="figur-name">MELK:</span><span class="dialog-text">Mich? Woher wusstest du—</span></div>
@@ -3369,38 +3422,41 @@ was morgen kommt – wer ist dabei?</p>
 <p class="format-regieanweisung">(Sie mustert ihn von Kopf bis Fuss.)</p>
 <div class="format-dialog"><span class="figur-name">MARTHE:</span><span class="dialog-text">Du siehst aus wie einer, der etwas sucht. Etwas, das er besser nicht finden sollte.</span></div>`;
 
-        save(KEYS.textbuch(projektId), demoTextbuch);
-        
-        // Demo-Cues (mit Ankertexten)
-        const demoCues = [
-          { id: genId(), typ: 'lx', nummer: 1, szeneId: demoSzenen[0].id, beschreibung: 'Morgendämmerung - langsamer Fade up', dauer: '10s', ankerText: '(Der Marktplatz bei Sonnenaufgang. Nebel hängt über dem Dorf. MARTHE tritt langsam auf, einen Korb tragend.)' },
-          { id: genId(), typ: 'q', nummer: 1, szeneId: demoSzenen[0].id, beschreibung: 'Vogelgezwitscher, leise', dauer: 'Loop', ankerText: '(Sie stellt den Korb ab und blickt zum Himmel.)' },
-          { id: genId(), typ: 'lx', nummer: 2, szeneId: demoSzenen[1].id, beschreibung: 'Tageslicht - heller', dauer: '3s', ankerText: '(Dorfplatz. MARTHE wartet. MELK kommt von rechts, verstaubt und erschöpft.)' },
-        ];
-        save(KEYS.cues(projektId), demoCues);
-        
-        // Demo-Kostüme
-        const demoKostueme = [
-          { id: genId(), name: 'Marthe - Grundkostüm', figur: demoFiguren[0].id, beschreibung: 'Einfaches Leinenkleid, Schürze, Kopftuch', szenen: [demoSzenen[0].id, demoSzenen[1].id], notizen: '' },
-          { id: genId(), name: 'Melk - Wanderkleidung', figur: demoFiguren[1].id, beschreibung: 'Zerrissene Hose, Lederwams, Hut', szenen: [demoSzenen[1].id, demoSzenen[2].id], notizen: 'Muss verstaubt aussehen' },
-        ];
-        save(KEYS.kostueme(projektId), demoKostueme);
-        
-        // Projekt-Meta
-        const meta = {
-          titel: 'Brandboden',
-          untertitel: 'oder Wie Melk die Kohle aus dem Feuer holt',
-          autor: 'Ueli Blum',
-          tagline: 'Ein sagenhaftes Wandertheater',
-          logline: 'Ein Köhlerjunge sucht nach dem Geheimnis des kalten Herzens.',
-          fassung: 'Arbeitsfassung',
-          fassungsDatum: new Date().toISOString()
-        };
-        save(KEYS.projektMeta(projektId), meta);
-      }
+      save(KEYS.textbuch(projektId), demoTextbuch);
       
-      state.projektId = projektId || projekte[0]?.id;
+      // Demo-Cues (mit Ankertexten)
+      const demoCues = [
+        { id: genId(), typ: 'lx', nummer: 1, szeneId: demoSzenen[0].id, beschreibung: 'Morgendämmerung - langsamer Fade up', dauer: '10s', ankerText: '(Der Marktplatz bei Sonnenaufgang. Nebel hängt über dem Dorf. MARTHE tritt langsam auf, einen Korb tragend.)' },
+        { id: genId(), typ: 'q', nummer: 1, szeneId: demoSzenen[0].id, beschreibung: 'Vogelgezwitscher, leise', dauer: 'Loop', ankerText: '(Sie stellt den Korb ab und blickt zum Himmel.)' },
+        { id: genId(), typ: 'lx', nummer: 2, szeneId: demoSzenen[1].id, beschreibung: 'Tageslicht - heller', dauer: '3s', ankerText: '(Dorfplatz. MARTHE wartet. MELK kommt von rechts, verstaubt und erschöpft.)' },
+      ];
+      save(KEYS.cues(projektId), demoCues);
+      
+      // Demo-Kostüme
+      const demoKostueme = [
+        { id: genId(), name: 'Marthe - Grundkostüm', figur: demoFiguren[0].id, beschreibung: 'Einfaches Leinenkleid, Schürze, Kopftuch', szenen: [demoSzenen[0].id, demoSzenen[1].id], notizen: '' },
+        { id: genId(), name: 'Melk - Wanderkleidung', figur: demoFiguren[1].id, beschreibung: 'Zerrissene Hose, Lederwams, Hut', szenen: [demoSzenen[1].id, demoSzenen[2].id], notizen: 'Muss verstaubt aussehen' },
+      ];
+      save(KEYS.kostueme(projektId), demoKostueme);
+      
+      // Projekt-Meta
+      const meta = {
+        titel: 'Brandboden',
+        untertitel: 'oder Wie Melk die Kohle aus dem Feuer holt',
+        autor: 'Ueli Blum',
+        tagline: 'Ein sagenhaftes Wandertheater',
+        logline: 'Ein Köhlerjunge sucht nach dem Geheimnis des kalten Herzens.',
+        fassung: 'Arbeitsfassung',
+        fassungsDatum: new Date().toISOString()
+      };
+      save(KEYS.projektMeta(projektId), meta);
+
+
+      state.projektId = projektId;
       loadProjektDaten();
+      closeModal('showOeffnenModal');
+      render();
+      showFormatToast('📖 Musterprojekt «Brandboden» angelegt');
     }
 
     // Lauf-Token gegen Races bei schnellen Projektwechseln
@@ -19478,6 +19534,18 @@ ${chunkText}`;
                 <p class="text-sm font-medium text-gray-700">Von der Festplatte öffnen</p>
                 <p class="text-xs text-gray-400">Projektdatei (.json) oder Sicherungskopie (.zip)</p>
                 <input type="file" id="oeffnen-datei-input" accept=".json,.zip" class="hidden" onchange="oeffnenVonDatei(this)">
+              </div>
+
+              <!-- Musterprojekt zum Ausprobieren -->
+              <div class="border border-gray-200 rounded-lg p-3 mb-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                   onclick="musterprojektLaden()">
+                <div class="flex items-center gap-3">
+                  <span class="text-xl">📖</span>
+                  <div class="flex-1">
+                    <p class="text-sm text-gray-700">Musterprojekt «Brandboden» ansehen</p>
+                    <p class="text-xs text-gray-400">Zum Ausprobieren · wird als eigenes Projekt angelegt</p>
+                  </div>
+                </div>
               </div>
               
               <!-- Letzte Projekte (lokal) -->
