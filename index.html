@@ -1288,6 +1288,7 @@
     let cloudZeitstempel = null; // geaendert_am der zuletzt geladenen Fassung
     let cloudBusy = false;       // verhindert doppelte Laeufe
     let cloudNachAnmeldung = null; // Aktion, die nach erfolgreichem Login laeuft
+    let cloudMedienLaufen = false; // true, solange Medien aus der Cloud geholt werden
 
 
     // ============================================
@@ -1535,6 +1536,11 @@
       const { data: liste } = await db.from('rebu_medien').select('*');
       if (!liste || !liste.length) return;
 
+      cloudMedienLaufen = true;
+      const altesBanner = document.getElementById('medien-warnung');
+      if (altesBanner) altesBanner.remove();
+      let fehlgeschlagen = 0;
+
       for (let i = 0; i < liste.length; i++) {
         const e = liste[i];
         const istBild = (e.art === 'bild');
@@ -1547,14 +1553,24 @@
         try {
           const { data: blob, error } = await db.storage.from('rebu-medien')
             .download(cloudUser.id + '/' + e.medium_id);
-          if (error) { console.warn('Medium fehlt in der Cloud:', e.medium_id); continue; }
+          if (error) { console.warn('Medium fehlt in der Cloud:', e.medium_id); fehlgeschlagen++; continue; }
 
           const datei = new File([blob], e.dateiname || e.medium_id, { type: e.mime || blob.type });
           if (istBild) await saveImageToDB(e.medium_id, datei);
           else await saveAudioToDB(e.medium_id, datei);
         } catch (x) {
           console.warn('Medium übersprungen:', e.medium_id, x);
+          fehlgeschlagen++;
         }
+      }
+
+      cloudMedienLaufen = false;
+
+      // Erst jetzt Bilanz ziehen – und mit einer Meldung, die zur Cloud passt.
+      if (fehlgeschlagen > 0) {
+        zeigeMedienWarnung(fehlgeschlagen, true);
+      } else {
+        showFormatToast('🎵 Alle Medien geladen');
       }
     }
 
@@ -2012,7 +2028,7 @@
     
     // Warnbanner, wenn beim Öffnen Audiodateien fehlen (z.B. weil nur eine
     // einzelne Backup-Datei statt des vollständigen ZIP geöffnet wurde).
-    function zeigeMedienWarnung(anzahl) {
+    function zeigeMedienWarnung(anzahl, ausCloud) {
       const alt = document.getElementById('medien-warnung');
       if (alt) alt.remove();
       const bar = document.createElement('div');
@@ -2020,7 +2036,10 @@
       bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b45309;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;padding:10px 16px;display:flex;align-items:center;gap:12px;box-shadow:0 -2px 8px rgba(0,0,0,0.2);';
       const txt = document.createElement('span');
       txt.style.flex = '1';
-      txt.textContent = '⚠️ ' + anzahl + ' Audiodatei' + (anzahl === 1 ? '' : 'en') + ' fehlen. Du hast wahrscheinlich nur eine einzelne Backup-Datei geöffnet – die eigentlichen Dateien stecken im vollständigen ZIP-Backup. Öffne dieses, um die Medien wiederherzustellen.';
+      const mehrzahl = (anzahl === 1 ? '' : 'en');
+      txt.textContent = ausCloud
+        ? '⚠️ ' + anzahl + ' Audiodatei' + mehrzahl + ' konnten nicht aus der Cloud geladen werden. Lade das Regiebuch nochmals aus der Cloud – meist genügt das. Sonst bei der Regie melden.'
+        : '⚠️ ' + anzahl + ' Audiodatei' + mehrzahl + ' fehlen. Du hast wahrscheinlich nur eine einzelne Backup-Datei geöffnet – die eigentlichen Dateien stecken im vollständigen ZIP-Backup. Öffne dieses, um die Medien wiederherzustellen.';
       const btn = document.createElement('button');
       btn.textContent = 'Verstanden';
       btn.style.cssText = 'background:#fff;color:#b45309;border:none;border-radius:4px;padding:6px 12px;font-weight:600;cursor:pointer;flex-shrink:0;';
@@ -2071,7 +2090,9 @@
       }
       // Nur bei echtem Audio warnen – Video muss ohnehin nach Neustart neu
       // gewählt werden und gilt nicht als Verlust.
-      if (fehlendAudio > 0) zeigeMedienWarnung(fehlendAudio);
+      // Nicht warnen, solange Medien aus der Cloud noch unterwegs sind –
+      // sonst meldet die App als fehlend, was gerade heruntergeladen wird.
+      if (fehlendAudio > 0 && !cloudMedienLaufen) zeigeMedienWarnung(fehlendAudio);
     }
     
     // Speicherplatz-Info
@@ -3825,11 +3846,23 @@ was morgen kommt – wer ist dabei?</p>
         var diffMs = now - savedTime;
         // Nur anzeigen wenn letzte Speicherung weniger als 7 Tage alt
         if (diffMs > 7 * 24 * 60 * 60 * 1000) return;
-        // Prüfen ob es ungesicherte Änderungen gibt (dirty flag oder kein File-Save)
-        if (!state.dirty && state.filePath) return;
-        // Wenn kein filePath gesetzt, aber Daten vorhanden — möglicher Crash
-        if (!state.filePath && state.szenen && state.szenen.length > 0) {
-          // Daten vorhanden, aber nie in Datei gesichert
+        // Beim allerersten Start steht das Oeffnen-Fenster offen – dann hat
+        // niemand etwas verloren, und der Dialog legt sich nur davor.
+        if (state.showOeffnenModal) return;
+
+        // Gesichert ist gesichert: als Datei ODER in der Cloud.
+        if (!state.dirty && (state.filePath || cloudZeitstempel)) return;
+
+        // Ein Projekt ohne wirklichen Inhalt ist nichts, was man retten muesste.
+        var hatInhalt = (state.szenen && state.szenen.length > 1)
+          || (state.figuren && state.figuren.length > 0)
+          || Object.keys(state.textbuch || {}).some(function (k) {
+               var t = state.textbuch[k];
+               return typeof t === 'string' && t.replace(/<[^>]*>/g, '').trim().length > 0;
+             });
+        if (!hatInhalt) return;
+
+        if (!state.filePath && !cloudZeitstempel) {
           showRecoveryDialog(savedTime);
         }
       } catch(e) {
@@ -3845,7 +3878,7 @@ was morgen kommt – wer ist dabei?</p>
       var timeStr = new Date(savedTime).toLocaleString('de-CH');
       dialog.innerHTML = '<h3 style="margin:0 0 1rem;font-size:1.1rem;">\u{1F504} Ungespeicherte \u00c4nderungen gefunden</h3>' +
         '<p style="color:#555;font-size:0.9rem;">Im Browser wurden \u00c4nderungen vom <strong>' + timeStr + '</strong> gefunden, die m\u00f6glicherweise nicht gesichert wurden.</p>' +
-        '<p style="color:#555;font-size:0.85rem;margin-top:0.5rem;">Die Daten sind bereits geladen. M\u00f6chtest du sie jetzt als Datei sichern?</p>' +
+        '<p style="color:#555;font-size:0.85rem;margin-top:0.5rem;">Die Daten sind bereits geladen. M\u00f6chtest du sie jetzt als Sicherungskopie auf die Festplatte legen? (In die Cloud speicherst du wie gewohnt \u00fcber das Men\u00fc.)</p>' +
         '<div style="display:flex;gap:0.75rem;margin-top:1.5rem;justify-content:flex-end;">' +
           '<button id="recovery-ignore" style="padding:0.5rem 1rem;border:1px solid #d1d5db;border-radius:6px;background:white;cursor:pointer;">Ignorieren</button>' +
           '<button id="recovery-backup" style="padding:0.5rem 1rem;border:none;border-radius:6px;background:#6b4423;color:white;cursor:pointer;font-weight:600;">Jetzt sichern</button>' +
@@ -19511,7 +19544,7 @@ ${chunkText}`;
                     <p class="font-medium text-blue-800 text-sm">Aus der Cloud öffnen</p>
                     <p class="text-xs text-blue-700">
                       ${cloudUser
-                        ? 'Produktion: ' + escapeHtml(cloudUser.email.split('@')[0]) + ' · letzter Stand des Teams'
+                        ? 'Produktion: ' + escapeHtml(cloudUser.email.split('@')[0]) + ' · gemeinsamer Stand'
                         : 'Anmeldung nötig · gemeinsamer Stand mit der Regieassistenz'}
                     </p>
                   </div>
@@ -19694,7 +19727,7 @@ ${chunkText}`;
                     <p class="font-medium text-blue-800 text-sm">In der Cloud speichern</p>
                     <p class="text-xs text-blue-700">
                       ${cloudUser
-                        ? 'Produktion: ' + escapeHtml(cloudUser.email.split('@')[0]) + ' · für alle im Team sofort verfügbar'
+                        ? 'Produktion: ' + escapeHtml(cloudUser.email.split('@')[0]) + ' · für die andern sofort sichtbar'
                         : 'Anmeldung nötig · für das gemeinsame Arbeiten mit der Regieassistenz'}
                     </p>
                   </div>
