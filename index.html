@@ -11,7 +11,7 @@
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <!-- Supabase entfernt für Stand-alone Version -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
     // PDF.js Worker konfigurieren
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -1270,37 +1270,322 @@
     }
 
     // ============================================
-    // SUPABASE CLOUD - DEAKTIVIERT (Stand-alone Version)
+    // SUPABASE CLOUD
     // ============================================
-    const SUPABASE_URL = '';
-    const SUPABASE_ANON_KEY = '';
-    // Dummy-DB für Stand-alone Version
-    const db = { 
-      from: () => ({ 
-        select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: null, error: null }), order: () => Promise.resolve({ data: [], error: null }) }), order: () => Promise.resolve({ data: [], error: null }) }),
-        insert: () => Promise.resolve({ data: null, error: null }), 
-        upsert: () => Promise.resolve({ data: null, error: null }), 
-        update: () => ({ eq: () => Promise.resolve({ error: null }) }), 
-        delete: () => ({ eq: () => Promise.resolve({ error: null }) })
-      }), 
-      auth: { 
-        getSession: () => Promise.resolve({ data: { session: null } }),
-        getUser: () => Promise.resolve({ data: { user: null }, error: null }), 
-        signInWithPassword: () => Promise.resolve({ error: { message: 'Cloud deaktiviert in Stand-alone Version' } }), 
-        signUp: () => Promise.resolve({ error: { message: 'Cloud deaktiviert' } }), 
-        signOut: () => Promise.resolve({}) 
-      } 
-    };
-    
-    // Cloud ist in der Stand-alone-Version deaktiviert.
-    // Solange dieses Flag false ist, wird keine Cloud-UI angeboten
-    // (vorher konnten Nutzer in einen Login-Flow laufen, der garantiert scheitert).
-    const CLOUD_ENABLED = false;
+    // Ein Konto entspricht einer Produktion. Alle Personen einer Produktion
+    // melden sich mit demselben Konto an. Row Level Security in der Datenbank
+    // sorgt dafuer, dass jedes Konto nur die eigenen Daten sieht - im Frontend
+    // muss dafuer nichts geprueft werden. Der Schluessel darf offen im
+    // Quelltext stehen, er ist keine Geheimnis, sondern die Projektadresse.
+    const SUPABASE_URL = 'https://zdbrpkqytvzgokvpgtou.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_teCjMQpJHwCUcthwVKnoAQ_JvZOqc_T';
 
-    let cloudUser = null;
-    let cloudProjects = [];
-    let currentCloudProjectId = null;
-    let isCloudMode = false;
+    const db = (window.supabase && window.supabase.createClient)
+      ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+      : null;
+
+    let cloudUser = null;        // null = nicht angemeldet
+    let cloudZeitstempel = null; // geaendert_am der zuletzt geladenen Fassung
+    let cloudBusy = false;       // verhindert doppelte Laeufe
+
+
+    // ============================================
+    // CLOUD: ANMELDUNG
+    // ============================================
+    async function cloudPruefen() {
+      if (!db) return;
+      try {
+        const { data } = await db.auth.getSession();
+        cloudUser = (data && data.session && data.session.user) ? data.session.user : null;
+      } catch (e) {
+        console.warn('Cloud nicht erreichbar:', e);
+        cloudUser = null;
+      }
+      render();
+    }
+
+    async function cloudLogin() {
+      if (!db) return alert('Cloud nicht verfügbar.');
+      const email = (document.getElementById('cloud_email') || {}).value;
+      const codewort = (document.getElementById('cloud_codewort') || {}).value;
+      if (!email || !codewort) return alert('Bitte Adresse und Codewort eingeben.');
+
+      const { data, error } = await db.auth.signInWithPassword({ email: email.trim(), password: codewort });
+      // Bewusst keine Detailmeldung: sonst verraet sie, welche Adressen es gibt.
+      if (error) { alert('Anmeldung fehlgeschlagen. Adresse oder Codewort stimmt nicht.'); return; }
+
+      cloudUser = data.user;
+      state.showCloudModal = false;
+      render();
+      showFormatToast('☁️ Angemeldet als ' + cloudUser.email);
+    }
+
+    async function cloudLogout() {
+      if (!db) return;
+      await db.auth.signOut();
+      cloudUser = null;
+      cloudZeitstempel = null;
+      state.showCloudModal = false;
+      render();
+    }
+
+    // ============================================
+    // CLOUD: SPEICHERN
+    // ============================================
+    // Die Projektdaten (JSON) gehen bei jedem Speichern hoch. Die Mediendateien
+    // liegen getrennt im Dateispeicher und werden nur hochgeladen, wenn sie dort
+    // noch fehlen - sonst wuerde jede Probennotiz 125 MB durch die Leitung schieben.
+    async function cloudSpeichern() {
+      if (!db || !cloudUser) return;
+      if (cloudBusy) return alert('Es läuft bereits eine Cloud-Übertragung.');
+      cloudBusy = true;
+      try {
+        saveCurrentText(true);
+        flushPendingSave();
+        saveProjektDaten();
+
+        // 1. Gibt es schon eine Fassung, und ist sie neuer als unsere?
+        const vorhanden = await cloudZeileHolen();
+        if (vorhanden && cloudZeitstempel && vorhanden.geaendert_am !== cloudZeitstempel) {
+          const wann = new Date(vorhanden.geaendert_am).toLocaleString('de-CH');
+          const weiter = confirm(
+            'Achtung: Seit du geladen hast, wurde in der Cloud gespeichert (' + wann + ').\n\n' +
+            'Wenn du fortfährst, gehen diese Änderungen verloren. Trotzdem speichern?'
+          );
+          if (!weiter) return;
+        }
+
+        // 2. Medien abgleichen (nur fehlende)
+        await cloudMedienHoch();
+
+        // 3. Projektdaten
+        showFormatToast('☁️ Projektdaten werden übertragen …');
+        const inhalt = exportToDramera();
+        if (inhalt.data && inhalt.data.projektMeta && typeof inhalt.data.projektMeta.titelbild === 'string'
+            && inhalt.data.projektMeta.titelbild.indexOf('idb:') === 0) {
+          inhalt.data.projektMeta.titelbild = await resolveTitelbildForExport(inhalt.data.projektMeta.titelbild);
+        }
+        const titel = (state.projektMeta && state.projektMeta.titel) || 'Regiebuch';
+
+        let ergebnis;
+        if (vorhanden) {
+          ergebnis = await db.from('rebu_daten')
+            .update({ inhalt: inhalt, titel: titel })
+            .eq('id', vorhanden.id).select('geaendert_am').single();
+        } else {
+          ergebnis = await db.from('rebu_daten')
+            .insert({ inhalt: inhalt, titel: titel })
+            .select('geaendert_am').single();
+        }
+        if (ergebnis.error) { alert('Speichern fehlgeschlagen: ' + ergebnis.error.message); return; }
+
+        cloudZeitstempel = ergebnis.data.geaendert_am;
+        state.dirty = false;
+        updateHeaderStatus();
+        render();
+        showFormatToast('☁️ In der Cloud gespeichert');
+      } catch (e) {
+        console.error('Cloud-Speichern:', e);
+        alert('Speichern fehlgeschlagen: ' + e.message);
+      } finally {
+        cloudBusy = false;
+      }
+    }
+
+    async function cloudZeileHolen() {
+      const { data, error } = await db.from('rebu_daten')
+        .select('id, geaendert_am').order('geaendert_am', { ascending: false }).limit(1);
+      if (error) throw error;
+      return (data && data.length) ? data[0] : null;
+    }
+
+    // Sammelt alle Medien, die hochgeladen werden muessen (Audio und Bilder)
+    function cloudMedienListe() {
+      const liste = [];
+      (state.medien || []).forEach(function (m) {
+        liste.push({ id: m.id, art: 'audio', name: m.name || m.filename || m.id });
+      });
+      (collectProjectImageIds() || []).forEach(function (id) {
+        liste.push({ id: id, art: 'bild', name: id });
+      });
+      return liste;
+    }
+
+    async function cloudMedienHoch() {
+      const alle = cloudMedienListe();
+      if (!alle.length) return;
+
+      const { data: schonOben } = await db.from('rebu_medien').select('medium_id');
+      const vorhanden = {};
+      (schonOben || []).forEach(function (m) { vorhanden[m.medium_id] = true; });
+
+      const fehlend = alle.filter(function (m) { return !vorhanden[m.id]; });
+      if (!fehlend.length) return;
+
+      for (let i = 0; i < fehlend.length; i++) {
+        const m = fehlend[i];
+        showFormatToast('⬆️ Medien ' + (i + 1) + ' von ' + fehlend.length + ' …');
+        try {
+          const result = (m.art === 'audio')
+            ? await loadAudioFromDB(m.id)
+            : await loadImageFromDB(m.id);
+          if (!result || !result.data || !result.data.data) continue;
+
+          const typ = result.data.type || (m.art === 'audio' ? 'audio/mpeg' : 'image/jpeg');
+          const blob = new Blob([result.data.data], { type: typ });
+          const pfad = cloudUser.id + '/' + m.id;
+
+          const { error } = await db.storage.from('rebu-medien')
+            .upload(pfad, blob, { upsert: true, contentType: typ });
+          if (error) { console.warn('Medium übersprungen:', m.id, error.message); continue; }
+
+          await db.from('rebu_medien').upsert({
+            medium_id: m.id,
+            dateiname: result.data.name || m.name,
+            mime: typ,
+            groesse: result.data.size || blob.size,
+            art: m.art
+          }, { onConflict: 'besitzer,medium_id' });
+        } catch (e) {
+          console.warn('Medium übersprungen:', m.id, e);
+        }
+      }
+    }
+
+    // ============================================
+    // CLOUD: LADEN
+    // ============================================
+    async function cloudLaden() {
+      if (!db || !cloudUser) return;
+      if (cloudBusy) return alert('Es läuft bereits eine Cloud-Übertragung.');
+
+      const { data, error } = await db.from('rebu_daten')
+        .select('inhalt, geaendert_am, titel')
+        .order('geaendert_am', { ascending: false }).limit(1);
+
+      if (error) { alert('Laden fehlgeschlagen: ' + error.message); return; }
+      if (!data || !data.length) { alert('In der Cloud liegt noch kein Regiebuch.'); return; }
+
+      const wann = new Date(data[0].geaendert_am).toLocaleString('de-CH');
+      if (!confirm('Regiebuch «' + (data[0].titel || 'Ohne Titel') + '» aus der Cloud laden?\n' +
+                   'Stand: ' + wann + '\n\n' +
+                   'Der aktuelle Inhalt im Browser wird ersetzt.')) return;
+
+      cloudBusy = true;
+      try {
+        showFormatToast('⬇️ Projektdaten werden geladen …');
+        await importFromDramera(data[0].inhalt);
+        cloudZeitstempel = data[0].geaendert_am;
+        await cloudMedienRunter();
+        render();
+        showFormatToast('☁️ Aus der Cloud geladen');
+      } catch (e) {
+        console.error('Cloud-Laden:', e);
+        alert('Laden fehlgeschlagen: ' + e.message);
+      } finally {
+        cloudBusy = false;
+      }
+    }
+
+    // Holt nur die Medien, die lokal noch fehlen. Beim zweiten Mal auf demselben
+    // Geraet passiert hier also nichts mehr.
+    async function cloudMedienRunter() {
+      const { data: liste } = await db.from('rebu_medien').select('*');
+      if (!liste || !liste.length) return;
+
+      for (let i = 0; i < liste.length; i++) {
+        const e = liste[i];
+        const istBild = (e.art === 'bild');
+        try {
+          const schonDa = istBild ? await loadImageFromDB(e.medium_id) : await loadAudioFromDB(e.medium_id);
+          if (schonDa) continue;
+        } catch (x) { /* nicht vorhanden - weiter */ }
+
+        showFormatToast('⬇️ Medien ' + (i + 1) + ' von ' + liste.length + ' …');
+        try {
+          const { data: blob, error } = await db.storage.from('rebu-medien')
+            .download(cloudUser.id + '/' + e.medium_id);
+          if (error) { console.warn('Medium fehlt in der Cloud:', e.medium_id); continue; }
+
+          const datei = new File([blob], e.dateiname || e.medium_id, { type: e.mime || blob.type });
+          if (istBild) await saveImageToDB(e.medium_id, datei);
+          else await saveAudioToDB(e.medium_id, datei);
+        } catch (x) {
+          console.warn('Medium übersprungen:', e.medium_id, x);
+        }
+      }
+    }
+
+    // ============================================
+    // CLOUD: ANMELDEFENSTER
+    // ============================================
+    function renderCloudLoginModal() {
+      if (cloudUser) {
+        const stand = cloudZeitstempel
+          ? new Date(cloudZeitstempel).toLocaleString('de-CH')
+          : 'noch nichts geladen';
+        return `
+          <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showCloudModal')">
+            <div class="modal-content" style="max-width: 440px;" onclick="event.stopPropagation()">
+              <div class="modal-header">
+                <h3>☁️ Cloud</h3>
+                <button class="modal-close" onclick="closeModal('showCloudModal')">×</button>
+              </div>
+              <div class="p-4">
+                <div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+                  <div class="text-green-700 font-medium text-sm">Angemeldet</div>
+                  <div class="text-green-600 text-sm">${escapeHtml(cloudUser.email)}</div>
+                  <div class="text-gray-500 text-xs mt-1">Zuletzt geladen: ${stand}</div>
+                </div>
+                <div class="flex gap-2 mb-3">
+                  <button class="btn btn-primary flex-1" onclick="closeModal('showCloudModal'); cloudSpeichern()">
+                    ☁️ Speichern
+                  </button>
+                  <button class="btn btn-outline flex-1" onclick="closeModal('showCloudModal'); cloudLaden()">
+                    ⬇️ Laden
+                  </button>
+                </div>
+                <p class="text-xs text-gray-500 mb-3">
+                  Mediendateien werden nur beim ersten Mal übertragen. Danach geht
+                  das Speichern in Sekunden.
+                </p>
+                <button class="btn btn-outline w-full" onclick="cloudLogout()">Abmelden</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="closeModal('showCloudModal')">
+          <div class="modal-content" style="max-width: 400px;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+              <h3>☁️ Cloud-Anmeldung</h3>
+              <button class="modal-close" onclick="closeModal('showCloudModal')">×</button>
+            </div>
+            <div class="p-4">
+              <p class="text-sm text-gray-600 mb-4">
+                Für das gemeinsame Arbeiten an einer Produktion. Adresse und Codewort
+                bekommst du von der Regie.
+              </p>
+              <label class="block text-sm font-medium mb-1">Adresse</label>
+              <input id="cloud_email" type="email" class="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-3"
+                     autocomplete="username" placeholder="produktion@ueliblum.ch">
+              <label class="block text-sm font-medium mb-1">Codewort</label>
+              <input id="cloud_codewort" type="password" class="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-4"
+                     autocomplete="current-password"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();cloudLogin();}">
+              <button class="btn btn-primary w-full" onclick="cloudLogin()">Anmelden</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function oeffneCloudFenster() {
+      state.showCloudModal = true;
+      render();
+    }
 
     // ============================================
     // UTILITIES
@@ -3003,652 +3288,8 @@
           </div>\
         </div>';
     }
-    
-    async function checkCloudAuth() {
-      const { data: { session } } = await db.auth.getSession();
-      if (session?.user) {
-        cloudUser = session.user;
-        isCloudMode = true;
-        await loadCloudProjects();
-        
-        // Automatisch Projekt öffnen wenn in URL angegeben
-        const urlProjectId = getUrlProjectId();
-        if (urlProjectId) {
-          const cloudProject = cloudProjects.find(p => p.id === urlProjectId);
-          if (cloudProject) {
-            console.log('Auto-opening project from URL:', urlProjectId);
-            await selectCloudProject(urlProjectId);
-          }
-        }
-      }
-      render();
-    }
-    
-    async function cloudLogin(email, password) {
-      const { data, error } = await db.auth.signInWithPassword({ email, password });
-      if (error) { alert('Login fehlgeschlagen: ' + error.message); return; }
-      cloudUser = data.user;
-      isCloudMode = true;
-      await loadCloudProjects();
-      render();
-    }
-    
-    async function cloudRegister(email, password, name) {
-      const { data, error } = await db.auth.signUp({ 
-        email, 
-        password,
-        options: { data: { full_name: name } }
-      });
-      if (error) { alert('Registrierung fehlgeschlagen: ' + error.message); return; }
-      alert('Registrierung erfolgreich! Bitte E-Mail bestätigen.');
-    }
-    
-    async function cloudLogout() {
-      await db.auth.signOut();
-      cloudUser = null;
-      cloudProjects = [];
-      currentCloudProjectId = null;
-      isCloudMode = false;
-      render();
-    }
-    
-    async function loadCloudProjects() {
-      const { data, error } = await db.from('projects')
-        .select('*')
-        .or('app_type.eq.rebu,app_type.is.null')
-        .order('updated_at', { ascending: false });
-      if (!error && data) {
-        cloudProjects = data.map(p => ({
-          id: p.id,
-          name: p.name,
-          subtitle: p.subtitle,
-          author: p.author,
-          premiere: p.premiere_date,
-          venue: p.venue
-        }));
-      }
-    }
-    
-    async function selectCloudProject(cloudId) {
-      currentCloudProjectId = cloudId;
-      const cloudProject = cloudProjects.find(p => p.id === cloudId);
-      if (!cloudProject) return;
-      
-      const localId = 'cloud_' + cloudId;
-      let projekte = load(KEYS.projekte, []);
-      let existingIdx = projekte.findIndex(p => p.id === localId);
-      
-      const projektData = { id: localId, cloudId: cloudId, name: cloudProject.name };
-      
-      // Prüfe ob lokale Daten bereits existieren
-      const existingMeta = load(KEYS.projektMeta(localId), null);
-      const existingSzenen = load(KEYS.szenen(localId), null);
-      const hasLocalData = existingMeta !== null || (existingSzenen !== null && existingSzenen.length > 0);
-      
-      if (existingIdx >= 0) {
-        projekte[existingIdx] = projektData;
-      } else {
-        projekte.push(projektData);
-      }
-      save(KEYS.projekte, projekte);
-      
-      state.projektId = localId;
-      save(KEYS.aktuellesProjekt, localId);
-      
-      // Nur beim ERSTEN Mal von Cloud syncen (wenn keine lokalen Daten)
-      if (!hasLocalData) {
-        console.log('Erstes Mal: Sync von Cloud...');
-        await syncFromCloud(cloudId, localId);
-      } else {
-        console.log('Lokale Daten vorhanden, kein Sync nötig');
-        // IMMER den Projektnamen aus der Cloud übernehmen
-        const meta = load(KEYS.projektMeta(localId), {});
-        meta.titel = cloudProject.name || meta.titel || 'Unbenannt';
-        save(KEYS.projektMeta(localId), meta);
-      }
-      
-      loadProjektDaten();
-      render();
-    }
-    
-    async function syncFromCloud(cloudId, localId) {
-      console.log('syncFromCloud', cloudId, localId);
-      
-      // Projekt-Meta laden
-      const { data: project, error: projectError } = await db.from('projects').select('*').eq('id', cloudId).single();
-      if (project && !projectError) {
-        const meta = {
-          titel: project.name || 'Unbenannt',
-          untertitel: project.subtitle || '',
-          autor: project.author || '',
-          tagline: project.tagline || '',
-          logline: project.logline || '',
-          copyright: project.copyright || '',
-          titelbild: project.cover_image || '',
-          fassung: project.version_name || 'Arbeitsfassung',
-          fassungsDatum: project.version_date || new Date().toISOString(),
-          strukturTyp: project.structure_type || 'akte',
-          premiere: project.premiere_date || '',
-          spielort: project.venue || ''
-        };
-        save(KEYS.projektMeta(localId), meta);
-      }
-      
-      // Figuren laden
-      const { data: figures, error: figuresError } = await db.from('figures').select('*').eq('project_id', cloudId).order('sort_order');
-      if (!figuresError) {
-        save(KEYS.figuren(localId), (figures || []).map(f => ({
-          id: f.id, name: f.name || '', kuerzel: f.abbreviation || '',
-          beschreibung: f.description || '', want: f.want || '', need: f.need || ''
-        })));
-      }
-      
-      // Szenen laden
-      const { data: scenes, error: scenesError } = await db.from('scenes').select('*').eq('project_id', cloudId).order('sort_order');
-      if (!scenesError) {
-        const szenen = (scenes || []).map(s => ({
-          id: s.id, nummer: s.number || '', titel: s.title || s.name || '',
-          ort: s.location || '', zeit: s.time_of_day || '',
-          gruppe: s.scene_group || '', zusammenfassung: s.summary || '',
-          figuren: []
-        }));
-        
-        // Scene-Figures laden (optional - bei Fehler ignorieren)
-        const { data: sceneFigures } = await db.from('scene_figures').select('*').eq('project_id', cloudId);
-        if (sceneFigures) {
-          sceneFigures.forEach(sf => {
-            const szene = szenen.find(s => s.id === sf.scene_id);
-            if (szene && sf.figure_id) {
-              if (!szene.figuren) szene.figuren = [];
-              szene.figuren.push(sf.figure_id);
-            }
-          });
-        }
-        save(KEYS.szenen(localId), szenen);
-      }
-      
-      // Textbuch laden (optional)
-      const { data: sceneTexts } = await db.from('scene_texts').select('*').eq('project_id', cloudId);
-      if (sceneTexts && sceneTexts.length > 0) {
-        const textbuch = {};
-        sceneTexts.forEach(st => { textbuch[st.scene_id] = st.content || ''; });
-        save(KEYS.textbuch(localId), textbuch);
-      }
-      
-      // Cues laden (optional - bei Fehler ignorieren)
-      const { data: cues, error: cuesError } = await db.from('cues').select('*').eq('project_id', cloudId).order('cue_number');
-      if (!cuesError && cues) {
-        save(KEYS.cues(localId), cues.map(c => ({
-          id: c.id, typ: c.cue_type || 'lx', nummer: c.cue_number || 0,
-          szeneId: c.scene_id, beschreibung: c.description || '',
-          dauer: c.duration || '', ankerText: c.anchor_text || ''
-        })));
-      }
-      
-      // Kostüme laden (optional)
-      const { data: costumes } = await db.from('costumes').select('*').eq('project_id', cloudId);
-      if (costumes) {
-        const { data: costumeScenes } = await db.from('costume_scenes').select('*');
-        save(KEYS.kostueme(localId), costumes.map(k => ({
-          id: k.id, name: k.name || '', figur: k.figure_id,
-          beschreibung: k.description || '', notizen: k.notes || '',
-          szenen: (costumeScenes || []).filter(cs => cs.costume_id === k.id).map(cs => cs.scene_id)
-        })));
-      }
-      
-      // Requisiten laden (optional)
-      const { data: props } = await db.from('props').select('*').eq('project_id', cloudId);
-      if (props) {
-        const { data: propScenes } = await db.from('prop_scenes').select('*');
-        save(KEYS.requisiten(localId), props.map(r => ({
-          id: r.id, name: r.name || '', beschreibung: r.description || '',
-          szenen: (propScenes || []).filter(ps => ps.prop_id === r.id).map(ps => ps.scene_id)
-        })));
-      }
-      
-      // Medien laden (optional)
-      const { data: media } = await db.from('media').select('*').eq('project_id', cloudId);
-      if (media) {
-        save(KEYS.medien(localId), media.map(m => ({
-          id: m.id, name: m.name || '', typ: m.media_type || '',
-          url: m.url || '', beschreibung: m.description || ''
-        })));
-      }
-      
-      // Bühnenbilder laden (optional)
-      const { data: stageDesigns } = await db.from('stage_designs').select('*').eq('project_id', cloudId);
-      if (stageDesigns) {
-        save(KEYS.buehne(localId), stageDesigns.map(b => ({
-          id: b.id, name: b.name || '', bild: b.image_url || '', beschreibung: b.description || ''
-        })));
-      }
-      
-      // Fassungen laden (optional)
-      const { data: versions } = await db.from('script_versions').select('*').eq('project_id', cloudId).order('created_at', { ascending: false });
-      if (versions) {
-        save(KEYS.fassungen(localId), versions.map(v => ({
-          id: v.id, name: v.name || '', datum: v.version_date || v.created_at,
-          textbuch: v.content || {}
-        })));
-      }
-    }
-    
-    async function createCloudProject() {
-      const name = document.getElementById('cloud_projekt_name')?.value?.trim();
-      if (!name) return alert('Projektname erforderlich!');
-      if (!cloudUser) return alert('Bitte zuerst einloggen!');
-      
-      const { data: projectData, error } = await db.from('projects').insert({
-        name: name,
-        app_type: 'rebu',
-        created_by: cloudUser.id,
-        status: 'active'
-      }).select().single();
-      
-      if (error) { alert('Fehler: ' + error.message); return; }
-      
-      await db.from('project_members').insert({
-        project_id: projectData.id,
-        user_id: cloudUser.id,
-        role: 'owner'
-      });
-      
-      await loadCloudProjects();
-      await selectCloudProject(projectData.id);
-    }
-    
-    async function uploadProjectToCloud() {
-      if (!cloudUser) return alert('Bitte zuerst einloggen!');
-      if (!state.projektId) return alert('Kein Projekt ausgewählt!');
-      
-      const meta = state.projektMeta;
-      const localId = state.projektId;
-      
-      // Projekt erstellen
-      const { data: projectData, error } = await db.from('projects').insert({
-        name: meta.titel || 'Unbenannt',
-        subtitle: meta.untertitel || '',
-        author: meta.autor || '',
-        tagline: meta.tagline || '',
-        logline: meta.logline || '',
-        copyright: meta.copyright || '',
-        cover_image: meta.titelbild || '',
-        version_name: meta.fassung || 'Arbeitsfassung',
-        version_date: meta.fassungsDatum || new Date().toISOString(),
-        structure_type: meta.strukturTyp || 'akte',
-        premiere_date: meta.premiere || null,
-        venue: meta.spielort || '',
-        app_type: 'rebu',
-        created_by: cloudUser.id,
-        status: 'active'
-      }).select().single();
-      
-      if (error) { alert('Fehler: ' + error.message); return; }
-      
-      const cloudId = projectData.id;
-      
-      await db.from('project_members').insert({
-        project_id: cloudId,
-        user_id: cloudUser.id,
-        role: 'owner'
-      });
-      
-      // Figuren hochladen
-      const figuren = load(KEYS.figuren(localId), []);
-      console.log('Uploading', figuren.length, 'figures');
-      for (let i = 0; i < figuren.length; i++) {
-        const f = figuren[i];
-        const { error } = await db.from('figures').insert({
-          project_id: cloudId, name: f.name || '', abbreviation: f.kuerzel || '',
-          description: f.beschreibung || '', want: f.want || '', need: f.need || '',
-          sort_order: i, color: '#3b82f6'
-        });
-        if (error) console.error('Figure upload error:', error);
-      }
-      
-      // Szenen hochladen
-      const szenen = load(KEYS.szenen(localId), []);
-      console.log('Uploading', szenen.length, 'scenes');
-      for (let i = 0; i < szenen.length; i++) {
-        const s = szenen[i];
-        const { error } = await db.from('scenes').insert({
-          project_id: cloudId, name: s.titel || '', number: s.nummer || '',
-          title: s.titel || '', location: s.ort || '', time_of_day: s.zeit || '',
-          scene_group: s.gruppe || '', summary: s.zusammenfassung || '',
-          sort_order: i
-        });
-        if (error) console.error('Scene upload error:', error);
-      }
-      
-      // Scene-Figures hochladen
-      const { data: cloudScenes } = await db.from('scenes').select('id, number').eq('project_id', cloudId);
-      const { data: cloudFigures } = await db.from('figures').select('id, name').eq('project_id', cloudId);
-      
-      for (const s of szenen) {
-        const cloudScene = cloudScenes?.find(cs => cs.number === s.nummer);
-        if (cloudScene && s.figuren) {
-          for (const figurId of s.figuren) {
-            const localFigur = figuren.find(f => f.id === figurId);
-            const cloudFigur = cloudFigures?.find(cf => cf.name === localFigur?.name);
-            if (cloudFigur) {
-              await db.from('scene_figures').insert({
-                project_id: cloudId, scene_id: cloudScene.id, figure_id: cloudFigur.id
-              });
-            }
-          }
-        }
-      }
-      
-      // Textbuch hochladen
-      const textbuch = load(KEYS.textbuch(localId), {});
-      console.log('Uploading textbuch for', Object.keys(textbuch).length, 'scenes');
-      for (const [szeneId, content] of Object.entries(textbuch)) {
-        const localSzene = szenen.find(s => s.id === szeneId);
-        const cloudScene = cloudScenes?.find(cs => cs.number === localSzene?.nummer);
-        if (cloudScene) {
-          const { error } = await db.from('scene_texts').insert({
-            project_id: cloudId, scene_id: cloudScene.id, content: content
-          });
-          if (error) console.error('Textbuch upload error:', error);
-        }
-      }
-      
-      // Cues hochladen
-      const cues = load(KEYS.cues(localId), []);
-      console.log('Uploading', cues.length, 'cues');
-      for (const c of cues) {
-        const localSzene = szenen.find(s => s.id === c.szeneId);
-        const cloudScene = cloudScenes?.find(cs => cs.number === localSzene?.nummer);
-        const { error } = await db.from('cues').insert({
-          project_id: cloudId, scene_id: cloudScene?.id || null,
-          cue_type: c.typ || 'lx', cue_number: c.nummer || 0,
-          description: c.beschreibung || '', duration: c.dauer || '',
-          anchor_text: c.ankerText || ''
-        });
-        if (error) console.error('Cue upload error:', error);
-      }
-      
-      // Kostüme hochladen
-      const kostueme = load(KEYS.kostueme(localId), []);
-      console.log('Uploading', kostueme.length, 'costumes');
-      for (const k of kostueme) {
-        const localFigur = figuren.find(f => f.id === k.figur);
-        const cloudFigur = cloudFigures?.find(cf => cf.name === localFigur?.name);
-        const { data: costumeData, error } = await db.from('costumes').insert({
-          project_id: cloudId, figure_id: cloudFigur?.id || null,
-          name: k.name || '', description: k.beschreibung || '', notes: k.notizen || ''
-        }).select().single();
-        if (error) console.error('Costume upload error:', error);
-        
-        // Costume-Scenes
-        if (costumeData && k.szenen) {
-          for (const szeneId of k.szenen) {
-            const localSzene = szenen.find(s => s.id === szeneId);
-            const cloudScene = cloudScenes?.find(cs => cs.number === localSzene?.nummer);
-            if (cloudScene) {
-              await db.from('costume_scenes').insert({
-                costume_id: costumeData.id, scene_id: cloudScene.id
-              });
-            }
-          }
-        }
-      }
-      
-      // Requisiten hochladen
-      const requisiten = load(KEYS.requisiten(localId), []);
-      console.log('Uploading', requisiten.length, 'props');
-      for (const r of requisiten) {
-        const { data: propData, error } = await db.from('props').insert({
-          project_id: cloudId, name: r.name || '', description: r.beschreibung || ''
-        }).select().single();
-        if (error) console.error('Prop upload error:', error);
-        
-        if (propData && r.szenen) {
-          for (const szeneId of r.szenen) {
-            const localSzene = szenen.find(s => s.id === szeneId);
-            const cloudScene = cloudScenes?.find(cs => cs.number === localSzene?.nummer);
-            if (cloudScene) {
-              await db.from('prop_scenes').insert({
-                prop_id: propData.id, scene_id: cloudScene.id
-              });
-            }
-          }
-        }
-      }
-      
-      // Medien hochladen
-      const medien = load(KEYS.medien(localId), []);
-      console.log('Uploading', medien.length, 'media');
-      for (const m of medien) {
-        const { error } = await db.from('media').insert({
-          project_id: cloudId, name: m.name || '', media_type: m.typ || '',
-          url: m.url || '', description: m.beschreibung || ''
-        });
-        if (error) console.error('Media upload error:', error);
-      }
-      
-      // Bühnenbilder hochladen
-      const buehne = load(KEYS.buehne(localId), []);
-      console.log('Uploading', buehne.length, 'stage designs');
-      for (const b of buehne) {
-        const { error } = await db.from('stage_designs').insert({
-          project_id: cloudId, name: b.name || '', image_url: b.bild || '',
-          description: b.beschreibung || ''
-        });
-        if (error) console.error('Stage design upload error:', error);
-      }
-      
-      // Fassungen hochladen
-      const fassungen = load(KEYS.fassungen(localId), []);
-      console.log('Uploading', fassungen.length, 'script versions');
-      for (const f of fassungen) {
-        const { error } = await db.from('script_versions').insert({
-          project_id: cloudId, name: f.name || '', version_date: f.datum,
-          content: f.textbuch || {}
-        });
-        if (error) console.error('Version upload error:', error);
-      }
-      
-      // Lokales Projekt mit Cloud verknüpfen
-      let projekte = load(KEYS.projekte, []);
-      const idx = projekte.findIndex(p => p.id === localId);
-      if (idx >= 0) {
-        projekte[idx].cloudId = cloudId;
-        save(KEYS.projekte, projekte);
-      }
-      
-      currentCloudProjectId = cloudId;
-      await loadCloudProjects();
-      
-      alert('✅ Projekt in Cloud hochgeladen!');
-      render();
-    }
-    
-    // v2.2: Änderungen zur Cloud synchronisieren (für bestehende Cloud-Projekte)
-    let syncDebounceTimer = null;
-    async function syncToCloud() {
-      if (!cloudUser || !currentCloudProjectId || !isCloudMode) return;
-      
-      const cloudId = currentCloudProjectId;
-      const meta = state.projektMeta;
-      
-      console.log('Syncing to cloud:', cloudId);
-      
-      // 1. Projekt-Meta updaten
-      await db.from('projects').update({
-        name: meta.titel || 'Unbenannt',
-        subtitle: meta.untertitel || '',
-        author: meta.autor || '',
-        version_name: meta.fassung || 'Arbeitsfassung',
-        structure_type: meta.strukturTyp || 'akte',
-        premiere_date: meta.premiere || null,
-        venue: meta.spielort || '',
-        updated_at: new Date().toISOString()
-      }).eq('id', cloudId);
-      
-      // 2. Figuren synchronisieren
-      const localFiguren = state.figuren || [];
-      const { data: cloudFigures } = await db.from('figures').select('*').eq('project_id', cloudId);
-      
-      // Neue Figuren hinzufügen
-      for (let i = 0; i < localFiguren.length; i++) {
-        const f = localFiguren[i];
-        const existing = cloudFigures?.find(cf => cf.name === f.name);
-        if (!existing) {
-          await db.from('figures').insert({
-            project_id: cloudId,
-            name: f.name || '',
-            abbreviation: f.kuerzel || '',
-            description: f.beschreibung || '',
-            want: f.want || '',
-            need: f.need || '',
-            sort_order: i,
-            color: '#3b82f6'
-          });
-        } else {
-          // Existierende Figur updaten
-          await db.from('figures').update({
-            abbreviation: f.kuerzel || '',
-            description: f.beschreibung || '',
-            want: f.want || '',
-            need: f.need || '',
-            sort_order: i
-          }).eq('id', existing.id);
-        }
-      }
-      
-      // Gelöschte Figuren entfernen
-      const localNames = localFiguren.map(f => f.name);
-      for (const cf of (cloudFigures || [])) {
-        if (!localNames.includes(cf.name)) {
-          await db.from('figures').delete().eq('id', cf.id);
-        }
-      }
-      
-      // 3. Szenen synchronisieren
-      const localSzenen = state.szenen || [];
-      const { data: cloudScenes } = await db.from('scenes').select('*').eq('project_id', cloudId);
-      
-      // Neue Szenen hinzufügen
-      for (let i = 0; i < localSzenen.length; i++) {
-        const s = localSzenen[i];
-        const existing = cloudScenes?.find(cs => cs.number === s.nummer);
-        if (!existing) {
-          await db.from('scenes').insert({
-            project_id: cloudId,
-            name: s.titel || '',
-            number: s.nummer || '',
-            title: s.titel || '',
-            location: s.ort || '',
-            time_of_day: s.zeit || '',
-            scene_group: s.gruppe || '',
-            summary: s.zusammenfassung || '',
-            sort_order: i
-          });
-        } else {
-          // Existierende Szene updaten
-          await db.from('scenes').update({
-            name: s.titel || '',
-            title: s.titel || '',
-            location: s.ort || '',
-            time_of_day: s.zeit || '',
-            scene_group: s.gruppe || '',
-            summary: s.zusammenfassung || '',
-            sort_order: i
-          }).eq('id', existing.id);
-        }
-      }
-      
-      // Gelöschte Szenen entfernen
-      const localNumbers = localSzenen.map(s => s.nummer);
-      for (const cs of (cloudScenes || [])) {
-        if (!localNumbers.includes(cs.number)) {
-          await db.from('scenes').delete().eq('id', cs.id);
-        }
-      }
-      
-      console.log('Cloud sync completed');
-    }
-    
-    // Debounced sync (wartet 2 Sekunden nach letzter Änderung)
-    function scheduleSyncToCloud() {
-      if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
-      syncDebounceTimer = setTimeout(() => {
-        syncToCloud();
-      }, 2000);
-    }
-    
-    // v2.0: Einfaches Cloud-Projekt erstellen (mit Prompt)
-    async function createCloudProjectSimple() {
-      if (!cloudUser) {
-        state.showCloudModal = true;
-        render();
-        return alert('Bitte zuerst einloggen!');
-      }
-      
-      const name = prompt('Name für neues Cloud-Projekt:');
-      if (!name || !name.trim()) return;
-      
-      const { data: projectData, error } = await db.from('projects').insert({
-        name: name.trim(),
-        app_type: 'rebu',
-        created_by: cloudUser.id,
-        status: 'active'
-      }).select().single();
-      
-      if (error) { alert('Fehler: ' + error.message); return; }
-      
-      await db.from('project_members').insert({
-        project_id: projectData.id,
-        user_id: cloudUser.id,
-        role: 'owner'
-      });
-      
-      await loadCloudProjects();
-      await selectCloudProject(projectData.id);
-      
-      alert('☁️ Cloud-Projekt "' + name.trim() + '" erstellt!');
-    }
-    
-    // v2.0: Explizit von Cloud neu laden (überschreibt lokale Daten)
-    async function forceCloudSync() {
-      if (!currentCloudProjectId) return alert('Kein Cloud-Projekt aktiv!');
-      
-      const confirm_msg = '🔄 Von Cloud neu laden?\n\nAlle lokalen Änderungen werden mit den Cloud-Daten überschrieben!';
-      if (!confirm(confirm_msg)) return;
-      
-      const localId = state.projektId;
-      await syncFromCloud(currentCloudProjectId, localId);
-      loadProjektDaten();
-      render();
-      
-      alert('✅ Daten von Cloud geladen!');
-    }
-    
-    // v2.0: Wrapper für uploadProjectToCloud
-    async function uploadToCloud() {
-      if (!cloudUser) {
-        state.showCloudModal = true;
-        render();
-        return alert('Bitte zuerst einloggen!');
-      }
-      
-      const projektName = state.projektMeta?.titel || 'Unbenannt';
-      const confirm_msg = `⬆️ Projekt "${projektName}" in Cloud hochladen?\n\nDas Projekt wird mit der Cloud synchronisiert und auf allen Geräten verfügbar.`;
-      if (!confirm(confirm_msg)) return;
-      
-      await uploadProjectToCloud();
-    }
-    
-    async function deleteCloudProject(cloudId) {
-      if (!confirm('Cloud-Projekt wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden!')) return;
-      
-      const { error } = await db.from('projects').delete().eq('id', cloudId);
-      if (error) { alert('Fehler: ' + error.message); return; }
-      
-      await loadCloudProjects();
-      render();
-    }
+
+
 
     // ============================================
     // PROJEKT MANAGEMENT
@@ -3739,17 +3380,6 @@ was morgen kommt – wer ist dabei?</p>
 
     function loadProjektDaten() {
       if (!state.projektId) return;
-      
-      // Cloud-ID setzen wenn das Projekt mit Cloud verknüpft ist
-      const projekte = load(KEYS.projekte, []);
-      const projekt = projekte.find(p => p.id === state.projektId);
-      if (projekt?.cloudId) {
-        currentCloudProjectId = projekt.cloudId;
-      } else if (state.projektId && state.projektId.startsWith && state.projektId.startsWith('cloud_')) {
-        currentCloudProjectId = state.projektId.replace('cloud_', '');
-      } else {
-        currentCloudProjectId = null;
-      }
       
       // Default-Werte für neues Projekt
       const defaultMeta = {
@@ -4072,9 +3702,6 @@ was morgen kommt – wer ist dabei?</p>
 
       // Autosave-Indikator (bei IndexedDB-Fehler wird er oben async korrigiert)
       showAutosaveIndicator(true);
-
-      // v2.2: Auto-Sync zur Cloud (wenn Cloud-Projekt)
-      scheduleSyncToCloud();
 
       // Auto-file-save & save reminder
       scheduleAutoFileSave();
@@ -4435,7 +4062,7 @@ was morgen kommt – wer ist dabei?</p>
       } else {
         // Neues Projekt - Warnung anzeigen wenn aktuelles Projekt Daten hat
         const hatDaten = state.szenen.length > 0 || state.figuren.length > 0 || state.cues.length > 0;
-        const istCloudProjekt = !!currentCloudProjectId;
+        const istCloudProjekt = false;
         
         if (hatDaten) {
           // Custom-Dialog mit Export-Option anzeigen
@@ -7197,33 +6824,7 @@ was morgen kommt – wer ist dabei?</p>
       render();
     }
     
-    // v2.0: Handler für Cloud-Speichern Button
-    function handleCloudSave() {
-      closeProjektMenu();
-      if (!CLOUD_ENABLED) {
-        alert('Die Cloud-Funktion ist in dieser Version deaktiviert.\n\nNutze «Sicherungskopie speichern» (⌘S), um dein Projekt zu sichern.');
-        return;
-      }
-      const istCloudProjekt = !!(currentCloudProjectId && isCloudMode);
-      if (!cloudUser) {
-        state.showCloudModal = true;
-        render();
-      } else if (istCloudProjekt) {
-        alert('☁️ Bereits in Cloud gespeichert!');
-      } else {
-        uploadToCloud();
-      }
-    }
 
-    // v2.0: Handler für Cloud-Reload Button
-    function handleCloudReload() {
-      closeProjektMenu();
-      if (!CLOUD_ENABLED) return;
-      const istCloudProjekt = !!(currentCloudProjectId && isCloudMode);
-      if (istCloudProjekt) {
-        forceCloudSync();
-      }
-    }
     
     // v2.0: Warnung beim Schließen (nur für lokale Projekte)
     // ============================================
@@ -7950,16 +7551,6 @@ HANDELN STATT NUR BESCHREIBEN:
     function renderProjektListeModal() {
       const alleProjekte = load(KEYS.projekte, []);
       
-      // Cloud-Projekte hinzufügen die noch nicht lokal sind
-      if (cloudUser && cloudProjects.length > 0) {
-        cloudProjects.forEach(cp => {
-          const localId = 'cloud_' + cp.id;
-          if (!alleProjekte.find(p => p.id === localId || p.cloudId === cp.id)) {
-            alleProjekte.push({ id: localId, cloudId: cp.id, name: cp.name, isCloudOnly: true });
-          }
-        });
-      }
-      
       // Projekte mit Cloud-Status markieren
       const projekteAngereichert = alleProjekte.map(p => ({
         ...p,
@@ -8013,119 +7604,6 @@ HANDELN STATT NUR BESCHREIBEN:
       `;
     }
     
-    function renderCloudModal() {
-      const lokaleProj = load(KEYS.projekte, []).filter(p => !p.id?.startsWith('cloud_'));
-      const aktuellesProjekt = lokaleProj.find(p => p.id === state.projektId);
-      const hatCloudId = aktuellesProjekt?.cloudId;
-      
-      return `
-        <div class="modal-overlay" role="dialog" aria-modal="true" onclick="state.showCloudModal = false; render()">
-          <div class="modal-content" style="max-width: 600px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
-            <div class="modal-header">
-              <h3>☁️ Cloud-Synchronisation</h3>
-              <button class="modal-close" onclick="state.showCloudModal = false; render()">×</button>
-            </div>
-            <div class="p-4">
-              ${cloudUser ? `
-                <!-- Eingeloggt -->
-                <div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <div class="text-green-700 font-medium">✓ Eingeloggt</div>
-                      <div class="text-green-600 text-sm">${cloudUser.email}</div>
-                    </div>
-                    <button class="btn btn-sm btn-outline" onclick="cloudLogout()">Ausloggen</button>
-                  </div>
-                </div>
-                
-                <!-- Cloud-Projekte -->
-                <div class="mb-4">
-                  <h4 class="font-semibold mb-2">☁️ Cloud-Projekte (${cloudProjects.length})</h4>
-                  ${cloudProjects.length === 0 ? `
-                    <div class="text-gray-500 text-sm py-4 text-center">Keine Cloud-Projekte vorhanden</div>
-                  ` : `
-                    <div class="space-y-2 max-h-48 overflow-y-auto">
-                      ${cloudProjects.map(p => `
-                        <div class="flex items-center justify-between p-2 bg-gray-50 rounded ${currentCloudProjectId === p.id ? 'ring-2 ring-blue-500' : ''}">
-                          <div>
-                            <div class="font-medium">${escapeHtml(p.name)}</div>
-                            ${p.author ? `<div class="text-xs text-gray-500">${escapeHtml(p.author)}</div>` : ''}
-                          </div>
-                          <div class="flex gap-1">
-                            <button class="btn btn-xs btn-primary" onclick="selectCloudProject('${p.id}'); state.showCloudModal = false; render()">
-                              Öffnen
-                            </button>
-                            <button class="btn btn-xs btn-outline text-red-500" onclick="deleteCloudProject('${p.id}')">
-                              🗑️
-                            </button>
-                          </div>
-                        </div>
-                      `).join('')}
-                    </div>
-                  `}
-                </div>
-                
-                <!-- Neues Cloud-Projekt -->
-                <div class="mb-4 p-3 bg-blue-50 rounded-lg">
-                  <h4 class="font-semibold mb-2">+ Neues Cloud-Projekt</h4>
-                  <div class="flex gap-2">
-                    <input type="text" id="cloud_projekt_name" placeholder="Projektname" 
-                           class="flex-1 px-3 py-2 border rounded text-sm">
-                    <button class="btn btn-primary" onclick="createCloudProject()">
-                      Erstellen
-                    </button>
-                  </div>
-                </div>
-                
-                <!-- Lokales Projekt hochladen -->
-                ${state.projektId && typeof state.projektId === 'string' && !state.projektId.startsWith('cloud_') ? `
-                  <div class="p-3 bg-yellow-50 rounded-lg">
-                    <h4 class="font-semibold mb-2">⬆️ Aktuelles Projekt hochladen</h4>
-                    <p class="text-sm text-gray-600 mb-2">
-                      "${escapeHtml(state.projektMeta?.titel || 'Unbenannt')}" in die Cloud hochladen
-                    </p>
-                    <button class="btn btn-warning" onclick="uploadProjectToCloud()">
-                      ☁️ In Cloud hochladen
-                    </button>
-                  </div>
-                ` : ''}
-                
-              ` : `
-                <!-- Nicht eingeloggt - Login Form -->
-                <div class="space-y-4">
-                  <div>
-                    <label class="block text-sm font-medium mb-1">E-Mail</label>
-                    <input type="email" id="cloud_email" class="w-full px-3 py-2 border rounded">
-                  </div>
-                  <div>
-                    <label class="block text-sm font-medium mb-1">Passwort</label>
-                    <input type="password" id="cloud_password" class="w-full px-3 py-2 border rounded">
-                  </div>
-                  <div class="flex gap-2">
-                    <button class="btn btn-primary flex-1" onclick="cloudLogin(document.getElementById('cloud_email').value, document.getElementById('cloud_password').value)">
-                      Einloggen
-                    </button>
-                    <button class="btn btn-outline flex-1" onclick="toggleRegisterFields()">
-                      Registrieren
-                    </button>
-                  </div>
-                  
-                  <div id="register_fields" class="hidden space-y-2 pt-2 border-t">
-                    <div>
-                      <label class="block text-sm font-medium mb-1">Name</label>
-                      <input type="text" id="cloud_name" class="w-full px-3 py-2 border rounded">
-                    </div>
-                    <button class="btn btn-success w-full" onclick="cloudRegister(document.getElementById('cloud_email').value, document.getElementById('cloud_password').value, document.getElementById('cloud_name').value)">
-                      Konto erstellen
-                    </button>
-                  </div>
-                </div>
-              `}
-            </div>
-          </div>
-        </div>
-      `;
-    }
     
     function toggleRegisterFields() {
       const fields = document.getElementById('register_fields');
@@ -8171,7 +7649,7 @@ HANDELN STATT NUR BESCHREIBEN:
         ${state.showLightbox ? renderLightbox() : ''}
         ${showCueExportDialog ? renderCueExportDialog() : ''}
         ${state.showProjektModal ? renderProjektModal() : ''}
-        ${(state.showCloudModal && CLOUD_ENABLED) ? renderCloudModal() : ''}
+        ${state.showCloudModal ? renderCloudLoginModal() : ''}
         ${state.showProjektListeModal ? renderProjektListeModal() : ''}
         ${renderKiPanel()}
       `;
@@ -8523,7 +8001,7 @@ HANDELN STATT NUR BESCHREIBEN:
     }
 
         function renderHeader() {
-      const isCloudProject = currentCloudProjectId && isCloudMode;
+      const isCloudProject = !!cloudUser;
       const projektName = state.projektMeta?.titel || 'Neues Projekt';
       return `
         <header class="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
@@ -8542,6 +8020,25 @@ HANDELN STATT NUR BESCHREIBEN:
             <span class="text-xs text-gray-400" title="Referenz-Fassung für die Änderungsverfolgung – wird beim Anlegen einer neuen Fassung aktualisiert, nicht bei jeder Speicherung.">
               ${state.projektMeta.fassung || 'Arbeitsfassung'}
             </span>
+            ${cloudUser ? `
+              <button class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
+                      onclick="cloudSpeichern()" title="Regiebuch in die Cloud speichern">
+                ☁️ Speichern
+              </button>
+              <button class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                      onclick="cloudLaden()" title="Regiebuch aus der Cloud laden">
+                ⬇️ Laden
+              </button>
+              <button class="text-xs text-gray-400 hover:text-blue-600" onclick="oeffneCloudFenster()"
+                      title="Angemeldet als ${escapeHtml(cloudUser.email)}">
+                ${escapeHtml(cloudUser.email.split('@')[0])}
+              </button>
+            ` : `
+              <button class="text-xs text-gray-400 hover:text-blue-600" onclick="oeffneCloudFenster()"
+                      title="Cloud-Anmeldung für gemeinsames Arbeiten">
+                ☁️ Cloud
+              </button>
+            `}
             <button class="text-gray-400 hover:text-blue-600" onclick="openModal('showHelpModal')" title="Hilfe & Tastenkürzel (?)">
               ?
             </button>
@@ -13715,62 +13212,6 @@ ${text}`;
         state.szenen = newSzenen;
         state.textbuch = newTextbuch;
         
-        // Cloud-Sync wenn aktiv
-        if (isCloudMode && currentCloudProjectId) {
-          // Projekt-Meta in Cloud
-          await db.from('projects').update({
-            name: state.projektMeta.titel,
-            author: state.projektMeta.autor,
-            subtitle: state.projektMeta.untertitel,
-            tagline: state.projektMeta.tagline,
-            logline: state.projektMeta.logline,
-            premiere_date: state.projektMeta.premiere || null,
-            venue: state.projektMeta.spielort
-          }).eq('id', currentCloudProjectId);
-          
-          // Neue Figuren in Cloud
-          for (const fig of newFiguren) {
-            if (!existingFiguren.find(ef => ef.id === fig.id)) {
-              await db.from('figures').upsert({
-                id: fig.id,
-                project_id: currentCloudProjectId,
-                name: fig.name,
-                abbreviation: fig.kuerzel,
-                description: fig.beschreibung,
-                color: fig.farbe,
-                figure_type: fig.typ,
-                want: fig.want,
-                need: fig.need
-              });
-            }
-          }
-          
-          // Neue Szenen in Cloud (inkl. Text!)
-          for (const sz of newSzenen) {
-            if (!existingSzenen.find(es => es.id === sz.id)) {
-              await db.from('scenes').upsert({
-                id: sz.id,
-                project_id: currentCloudProjectId,
-                number: sz.nummer,
-                name: sz.titel || sz.name,
-                title: sz.titel,
-                description: sz.zusammenfassung,
-                location: sz.ort,
-                time_of_day: sz.zeit,
-                scene_group: sz.gruppe
-              });
-              
-              // ✅ Szenentext in Cloud speichern!
-              if (newTextbuch[sz.id]) {
-                await db.from('scene_texts').upsert({
-                  scene_id: sz.id,
-                  project_id: currentCloudProjectId,
-                  content: newTextbuch[sz.id]
-                });
-              }
-            }
-          }
-        }
         
         closeModal('showImportModal');
         render();
@@ -13799,9 +13240,6 @@ ${text}`;
           msg += '\n\n✍️ Autor: ' + state.projektMeta.autor;
         }
         
-        if (isCloudMode) {
-          msg += '\n\n☁️ Daten wurden in die Cloud synchronisiert.';
-        }
 
         if (konflikte.length > 0) {
           msg += '\n\n⚠️ ' + konflikte.length + ' Unterschied(e) bei Personen gefunden – gleich kannst du Feld für Feld entscheiden, was übernommen wird.';
@@ -20284,8 +19722,8 @@ const NINA_LOGO_BASE64 = '';
       // API-Key aus IndexedDB wiederherstellen (falls localStorage gelöscht)
       restoreApiKey();
       
-      // Cloud-Auth prüfen
-      checkCloudAuth();
+      // Cloud-Anmeldung prüfen
+      cloudPruefen();
       
       // Format-Indikator bei Cursor-Bewegung aktualisieren
       document.addEventListener('selectionchange', updateFormatIndicator);
