@@ -1407,6 +1407,9 @@
         }
         const titel = (state.projektMeta && state.projektMeta.titel) || 'Regiebuch';
 
+        // 3b. Plausibilitaet: keine Szene stillschweigend leeren
+        if (!cloudPlausibilitaet(vorhanden, inhalt)) { showFormatToast('Speichern abgebrochen'); return; }
+
         let ergebnis;
         if (vorhanden) {
           ergebnis = await db.from('rebu_daten')
@@ -1433,10 +1436,55 @@
     }
 
     async function cloudZeileHolen() {
-      const { data, error } = await db.from('rebu_daten')
-        .select('id, geaendert_am').order('geaendert_am', { ascending: false }).limit(1);
+      // felder = nur die Szenenliste aus dem JSON (fuer den Plausibilitaetscheck),
+      // nicht der ganze Blob mit Fassungen.
+      let { data, error } = await db.from('rebu_daten')
+        .select('id, geaendert_am, felder:inhalt->data->felder')
+        .order('geaendert_am', { ascending: false }).limit(1);
+      if (error) {
+        // Rueckfall ohne JSON-Pfad (dann entfaellt nur der Plausibilitaetscheck)
+        console.warn('cloudZeileHolen: JSON-Pfad nicht möglich, Rückfall:', error.message);
+        ({ data, error } = await db.from('rebu_daten')
+          .select('id, geaendert_am').order('geaendert_am', { ascending: false }).limit(1));
+      }
       if (error) throw error;
       return (data && data.length) ? data[0] : null;
+    }
+
+    // Vergleicht den lokalen Stand mit dem Cloud-Stand: Szenen, die in der Cloud
+    // Text haben und lokal leer waeren, deuten auf Datenverlust hin.
+    // Liefert true, wenn gespeichert werden darf.
+    function cloudPlausibilitaet(vorhanden, inhalt) {
+      try {
+        const cloudFelder = (vorhanden && Array.isArray(vorhanden.felder)) ? vorhanden.felder : [];
+        const lokalFelder = (inhalt && inhalt.data && Array.isArray(inhalt.data.felder)) ? inhalt.data.felder : [];
+        if (!cloudFelder.length) return true;
+
+        const istLeer = function (html) {
+          return !html || !String(html).replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+        };
+        const lokal = {};
+        lokalFelder.forEach(function (f) { lokal[f.id] = f; });
+
+        const verdaechtig = [];
+        cloudFelder.forEach(function (cf) {
+          if (istLeer(cf.inhalt)) return;
+          const lf = lokal[cf.id];
+          if (lf && istLeer(lf.inhalt)) {
+            verdaechtig.push((cf.nummer ? cf.nummer + ' ' : '') + (cf.titel || cf.id));
+          }
+        });
+        if (!verdaechtig.length) return true;
+
+        return confirm(
+          '⚠️ Achtung: Diese Szenen haben in der Cloud Text, wären nach dem Speichern aber LEER:\n\n' +
+          verdaechtig.slice(0, 10).join('\n') + (verdaechtig.length > 10 ? '\n…' : '') + '\n\n' +
+          'Das sieht nach Datenverlust aus. Trotzdem in die Cloud speichern?'
+        );
+      } catch (e) {
+        console.warn('Plausibilitätscheck übersprungen:', e);
+        return true;
+      }
     }
 
     // Sammelt alle Medien, die hochgeladen werden muessen (Audio und Bilder)
@@ -4721,6 +4769,9 @@ was morgen kommt – wer ist dabei?</p>
     // DRAMERA IMPORT/EXPORT
     // ============================================
     async function importFromDramera(jsonData) {
+      // Editor-Rueckschreiben sperren, bis der neue Zustand gerendert ist
+      _editorSchreibsperre = true;
+      if (_saveCurrentTextTimer) { clearTimeout(_saveCurrentTextTimer); _saveCurrentTextTimer = null; }
       try {
         const dramera = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
 
@@ -4942,6 +4993,7 @@ was morgen kommt – wer ist dabei?</p>
         // verwaister IndexedDB-Einträge aus alten Backups)
         try { await restoreAudioUrls(); } catch (e) { console.warn('Medien-Wiederherstellung:', e); }
 
+        _editorSchreibsperre = false;
         render();
         alert('✅ Import aus Backup erfolgreich!\n\n' +
               `${state.figuren.length} Figuren\n` +
@@ -4953,6 +5005,8 @@ was morgen kommt – wer ist dabei?</p>
       } catch (e) {
         console.error('Import-Fehler:', e);
         alert('❌ Import fehlgeschlagen: ' + e.message);
+      } finally {
+        _editorSchreibsperre = false;
       }
     }
 
@@ -6319,6 +6373,7 @@ was morgen kommt – wer ist dabei?</p>
       
       // Normaler Editor (Technik / Schauspieler)
       return `<div id="text-editor"
+                   data-szene-id="${state.aktiveSzene || ''}"
                    class="editor-content ${getEditorClasses()}"
                    contenteditable="true"
                    spellcheck="true"
@@ -6637,9 +6692,20 @@ was morgen kommt – wer ist dabei?</p>
       }, 400);
     }
 
+    // Solange ein Import/Projektwechsel laeuft, darf der Editor NICHT in den
+    // State zurueckschreiben: Der DOM zeigt noch die alte Szene, state.aktiveSzene
+    // zeigt schon auf die neue. Ein blur/visibilitychange/debounce in diesem
+    // Fenster hat sonst den alten (oft leeren) Editorinhalt in die erste Szene
+    // des frisch geladenen Projekts geschrieben.
+    let _editorSchreibsperre = false;
+
     function saveCurrentText(immediate = false) {
       // Anstehenden debounced Save verwerfen – wir speichern jetzt ohnehin frisch
       if (_saveCurrentTextTimer) { clearTimeout(_saveCurrentTextTimer); _saveCurrentTextTimer = null; }
+      if (_editorSchreibsperre) {
+        console.warn('saveCurrentText: übersprungen (Import/Projektwechsel läuft)');
+        return;
+      }
       // Fliesstext-Modus: Alle Editoren speichern
       if (state.textbuchModus === 'fliesstext') {
         const editors = document.querySelectorAll('.fliesstext-editor[data-szene-id]');
@@ -6664,6 +6730,13 @@ was morgen kommt – wer ist dabei?</p>
       // Szenen-Modus: Einzelnen Editor speichern
       const editor = document.getElementById('text-editor');
       if (editor && state.aktiveSzene) {
+        // SCHUTZ: Der Editor darf nur in die Szene schreiben, fuer die er
+        // gerendert wurde. Stimmt die ID nicht, ist der DOM veraltet.
+        const editorSzene = editor.dataset.szeneId || '';
+        if (editorSzene && editorSzene !== state.aktiveSzene) {
+          console.warn('saveCurrentText: Editor gehört zu', editorSzene, 'aktiv ist', state.aktiveSzene, '– nicht gespeichert');
+          return;
+        }
         // Cue-Marker und inline-regie Spans entfernen vor dem Speichern
         let content = stripCueMarkers(editor.innerHTML);
         content = stripInlineRegie(content);
@@ -17342,6 +17415,14 @@ ${chunkText}`;
     }
 
     function updateSzene(szeneId, field, value) {
+      // Chrome traegt nach der Cloud-Anmeldung die Mailadresse gern in ein
+      // beliebiges Textfeld ein (so landete sie im Feld «Zeit»). Abfangen.
+      if (cloudUser && cloudUser.email && typeof value === 'string'
+          && value.trim().toLowerCase() === String(cloudUser.email).toLowerCase()) {
+        console.warn('updateSzene: Autofill-Wert verworfen', field);
+        render();
+        return;
+      }
       const szene = state.szenen.find(s => s.id === szeneId);
       if (szene) {
         szene[field] = value;
