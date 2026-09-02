@@ -2566,6 +2566,10 @@
         { icon: '🔊', label: 'Ton/Audio-Cue an dieser Stelle', action: function() { createCueFromSelection('q', text, szeneId); } },
         { icon: '📺', label: 'Video-Cue an dieser Stelle', action: function() { createCueFromSelection('v', text, szeneId); } },
         { icon: '🔄', label: 'Umbau-Cue an dieser Stelle', action: function() { createCueFromSelection('u', text, szeneId); } },
+        'trenner',
+        { icon: '📚', label: 'Auswahl im Wörterbuch prüfen', action: function() { wbSenden(szeneId, 'auswahl'); } },
+        { icon: '📚', label: 'Absatz im Wörterbuch prüfen', action: function() { wbSenden(szeneId, 'absatz'); } },
+        { icon: '📚', label: 'Szene im Wörterbuch prüfen', action: function() { wbSenden(szeneId, 'szene'); } },
       ];
 
       eintraege.forEach(function(eintrag) {
@@ -2599,6 +2603,89 @@
       menu.style.left = Math.max(8, px) + 'px';
       menu.style.top = Math.max(8, py) + 'px';
     }
+
+    // =====================================================
+    // KOPPLUNG MIT DEM MUNDART-WÖRTERBUCH
+    // Ein Bereich (Auswahl, Absatz, Szene) geht per Fenster-Nachricht ins Wörterbuch,
+    // wird dort geprüft und kommt mit derselben Formatstruktur zurück.
+    // =====================================================
+    const WB_URL = 'https://mundart-woerterbuch.ch/';
+    const WB_ORIGIN = 'https://mundart-woerterbuch.ch';
+    let wbFenster = null, wbWartend = null;
+
+    function wbEditorFuer(szeneId) {
+      return document.querySelector('.fliesstext-editor[data-szene-id="' + szeneId + '"]') || document.getElementById('text-editor');
+    }
+
+    function wbBloecke(html) {
+      const doc = new DOMParser().parseFromString('<div id="w">' + (html || '') + '</div>', 'text/html');
+      return Array.from(doc.getElementById('w').children).map(el => el.outerHTML);
+    }
+
+    function wbSenden(szeneId, umfang) {
+      szeneId = szeneId || state.aktiveSzene;
+      const szene = state.szenen.find(s => s.id === szeneId);
+      const editor = wbEditorFuer(szeneId);
+      // Aktuellen Editor-Stand ins Modell übernehmen
+      let html = state.textbuch[szeneId] || '';
+      if (editor) { html = stripInlineRegie(stripCueMarkers(editor.innerHTML)); state.textbuch[szeneId] = html; }
+      const bloecke = wbBloecke(html);
+      if (!bloecke.length) { showFormatToast('Kein Text in dieser Szene'); return; }
+      let von = 0, bis = bloecke.length - 1;
+      if (umfang !== 'szene' && editor) {
+        const sel = window.getSelection();
+        const kinder = Array.from(editor.children);
+        const blockVon = (node) => { let n = node; while (n && n.parentNode !== editor) n = n.parentNode; return n ? kinder.indexOf(n) : -1; };
+        if (sel && sel.rangeCount) {
+          const r = sel.getRangeAt(0);
+          const a = blockVon(r.startContainer), b = blockVon(r.endContainer);
+          if (a >= 0) { von = Math.min(a, b >= 0 ? b : a); bis = Math.max(a, b >= 0 ? b : a); }
+          if (umfang === 'absatz') bis = von;
+        }
+        // Editor-Kinder und Modell-Blöcke sollten deckungsgleich sein; sonst ganze Szene
+        if (kinder.length !== bloecke.length) { von = 0; bis = bloecke.length - 1; }
+      }
+      let sprecher = '';
+      for (let i = von - 1; i >= 0; i--) {
+        const m = /figurenname[^>]*>([\s\S]*?)<\//.exec(bloecke[i]);
+        if (m) { sprecher = m[1].replace(/<[^>]+>/g, '').trim(); break; }
+        if (/format-(szene-titel|akt-titel|regieanweisung)/.test(bloecke[i])) break;
+      }
+      const nachricht = { typ: 'nina-pruefung', v: 1, quelle: 'rebu', projekt: (state.projektMeta && state.projektMeta.titel) || '', szeneId,
+        szeneTitel: szene ? ((szene.nummer ? szene.nummer + ' ' : '') + (szene.titel || '')) : '', von, bis, sprecher, html: bloecke.slice(von, bis + 1).join('') };
+      if (wbFenster && !wbFenster.closed) { wbFenster.postMessage(nachricht, WB_ORIGIN); wbFenster.focus(); }
+      else { wbWartend = nachricht; wbFenster = window.open(WB_URL + '#pruefung', 'mundart-woerterbuch'); }
+      showFormatToast('Ans Wörterbuch geschickt – dort prüfen und «zurück an Rebu» drücken');
+    }
+
+    window.addEventListener('message', function(ev) {
+      if (ev.origin !== WB_ORIGIN || !ev.data || typeof ev.data !== 'object') return;
+      const d = ev.data;
+      if (d.typ === 'nina-bereit') {
+        wbFenster = ev.source;
+        if (wbWartend) { ev.source.postMessage(wbWartend, WB_ORIGIN); wbWartend = null; }
+        return;
+      }
+      if (d.typ === 'nina-pruefung-ergebnis' && d.szeneId) {
+        if (!state.szenen.find(s => s.id === d.szeneId)) { showFormatToast('Szene nicht mehr gefunden'); return; }
+        const editor = wbEditorFuer(d.szeneId);
+        let html = state.textbuch[d.szeneId] || '';
+        if (editor && (editor.id !== 'text-editor' || state.aktiveSzene === d.szeneId)) html = stripInlineRegie(stripCueMarkers(editor.innerHTML));
+        const bloecke = wbBloecke(html);
+        let von = d.von, bis = d.bis;
+        if (bloecke.slice(von, bis + 1).join('') !== d.htmlAlt) {
+          const altBl = wbBloecke(d.htmlAlt);
+          let gefunden = -1;
+          for (let i = 0; i + altBl.length <= bloecke.length; i++) if (bloecke.slice(i, i + altBl.length).join('') === d.htmlAlt) { gefunden = i; break; }
+          if (gefunden < 0) { if (!confirm('Der Abschnitt hat sich in Rebu seit dem Senden verändert. Trotzdem an der ursprünglichen Stelle ersetzen?')) return; }
+          else { von = gefunden; bis = gefunden + altBl.length - 1; }
+        }
+        state.textbuch[d.szeneId] = bloecke.slice(0, von).concat([d.htmlNeu]).concat(bloecke.slice(bis + 1)).join('');
+        saveProjektDaten();
+        render();
+        showFormatToast('✓ Geprüfter Text aus dem Wörterbuch übernommen');
+      }
+    });
 
     // =====================================================
     // ZENTRALE FORMAT-DEFINITIONEN (Pages "Die Vollmacht")
