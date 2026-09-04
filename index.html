@@ -1594,7 +1594,12 @@
         const istBild = (e.art === 'bild');
         try {
           const schonDa = istBild ? await loadImageFromDB(e.medium_id) : await loadAudioFromDB(e.medium_id);
-          if (schonDa) continue;
+          // Nur überspringen, wenn lokal wirklich Daten liegen – ein leerer oder zu kleiner
+          // Eintrag (abgebrochener Download, alter Platzhalter) wird neu aus der Cloud geholt.
+          const lokalBytes = schonDa && schonDa.data && schonDa.data.data ? (schonDa.data.data.byteLength || schonDa.data.data.size || 0) : 0;
+          const cloudBytes = Number(e.groesse) || 0;
+          if (schonDa && lokalBytes > 0 && (!cloudBytes || lokalBytes === cloudBytes)) continue;
+          if (schonDa) console.warn('Medium lokal leer oder unvollständig – wird neu geladen:', e.medium_id, lokalBytes, 'statt', cloudBytes);
         } catch (x) { /* nicht vorhanden - weiter */ }
 
         showFormatToast('⬇️ Medien ' + (i + 1) + ' von ' + liste.length + ' …');
