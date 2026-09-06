@@ -1594,7 +1594,12 @@
         const istBild = (e.art === 'bild');
         try {
           const schonDa = istBild ? await loadImageFromDB(e.medium_id) : await loadAudioFromDB(e.medium_id);
-          if (schonDa) continue;
+          // Nur überspringen, wenn lokal wirklich Daten liegen – ein leerer oder zu kleiner
+          // Eintrag (abgebrochener Download, alter Platzhalter) wird neu aus der Cloud geholt.
+          const lokalBytes = schonDa && schonDa.data && schonDa.data.data ? (schonDa.data.data.byteLength || schonDa.data.data.size || 0) : 0;
+          const cloudBytes = Number(e.groesse) || 0;
+          if (schonDa && lokalBytes > 0 && (!cloudBytes || lokalBytes === cloudBytes)) continue;
+          if (schonDa) console.warn('Medium lokal leer oder unvollständig – wird neu geladen:', e.medium_id, lokalBytes, 'statt', cloudBytes);
         } catch (x) { /* nicht vorhanden - weiter */ }
 
         showFormatToast('⬇️ Medien ' + (i + 1) + ' von ' + liste.length + ' …');
@@ -1863,7 +1868,8 @@
     // das Speichern damit nicht mehr blockieren.
     // ============================================
     async function saveProjectDataToDB(projektId, daten) {
-      if (!projektId) return false;
+      if (projektId && typeof projektId === 'object') projektId = projektId.id;
+      if (!projektId || typeof projektId !== 'string') { console.error('Projektdaten-Speicherfehler: ungültige Projekt-ID', projektId); return false; }
       if (!mediaBD) await initAudioDB();
       return new Promise((resolve) => {
         try {
@@ -1880,7 +1886,8 @@
     }
 
     async function loadProjectDataFromDB(projektId) {
-      if (!projektId) return null;
+      if (projektId && typeof projektId === 'object') projektId = projektId.id;
+      if (!projektId || typeof projektId !== 'string') return null;
       if (!mediaBD) await initAudioDB();
       return new Promise((resolve) => {
         try {
@@ -3478,15 +3485,39 @@
     // ============================================
     // PROJEKT MANAGEMENT
     // ============================================
+    // Propla läuft auf derselben Web-Adresse und benutzt dieselben Speicher-Schlüssel
+    // (nina_projekte, nina_aktuelles_projekt). Es hat dort schon ein ganzes Projekt-Objekt
+    // hinterlegt, worauf Rebu mit «Speichern fehlgeschlagen» stolperte (IndexedDB braucht
+    // eine Zeichenkette als Schlüssel). Darum: Rebu merkt sich sein aktuelles Projekt unter
+    // einem eigenen Schlüssel, nimmt nur Zeichenketten an und ignoriert Propla-Einträge.
+    const REBU_AKTUELL_KEY = STORAGE_PREFIX + 'rebu_aktuelles_projekt';
+    function istRebuProjekt(p) { return !!(p && p.id && !('createdAt' in p && !('erstellt' in p))); }
+    function rebuProjekte() { return load(KEYS.projekte, []).filter(istRebuProjekt); }
+    function rebuAktuellesLesen() {
+      let id = load(REBU_AKTUELL_KEY);
+      if (!id) id = load(KEYS.aktuellesProjekt);
+      if (id && typeof id === 'object') id = id.id;
+      if (typeof id !== 'string') id = null;
+      const liste = rebuProjekte();
+      if (id && !liste.some(p => p.id === id)) id = null;
+      if (!id && liste.length) id = liste[liste.length - 1].id;   // zuletzt angelegtes Rebu-Projekt
+      return id;
+    }
+    function rebuAktuellesSetzen(id) {
+      if (typeof id !== 'string') return;
+      save(REBU_AKTUELL_KEY, id);
+      save(KEYS.aktuellesProjekt, id);
+    }
+
     function initProjekt() {
-      const projekte = load(KEYS.projekte, []);
-      let projektId = load(KEYS.aktuellesProjekt);
+      const projekte = rebuProjekte();
+      let projektId = rebuAktuellesLesen();
       
       if (!projektId || projekte.length === 0) {
         projektId = genId();
         const neuProjekt = { id: projektId, name: 'Neues Projekt', erstellt: new Date().toISOString() };
-        save(KEYS.projekte, [neuProjekt]);
-        save(KEYS.aktuellesProjekt, projektId);
+        save(KEYS.projekte, load(KEYS.projekte, []).concat([neuProjekt]));
+        rebuAktuellesSetzen(projektId);
         
         // Leeres Projekt: kein Musterinhalt. Wer Rebu zum ersten Mal oeffnet,
         // soll ein leeres Buch sehen und gleich sein eigenes laden koennen.
@@ -3514,6 +3545,30 @@
       }
       
       state.projektId = projektId || projekte[0]?.id;
+
+      // Rettung: Solange der Zeiger ein Objekt war, hat Rebu seine Daten unter
+      // «…_[object Object]» gespiegelt. Liegt dort ein Textbuch und das aktuelle
+      // Projekt ist leer, werden diese Daten ins aktuelle Projekt übernommen.
+      try {
+        const kaputt = '[object Object]';
+        const alteSzenen = load(KEYS.szenen(kaputt), null);
+        const eigeneSzenen = load(KEYS.szenen(state.projektId), []);
+        if (Array.isArray(alteSzenen) && alteSzenen.length && !eigeneSzenen.length) {
+          Object.keys(KEYS).forEach(k => {
+            if (typeof KEYS[k] !== 'function') return;
+            const v = localStorage.getItem(KEYS[k](kaputt));
+            if (v !== null) localStorage.setItem(KEYS[k](state.projektId), v);
+          });
+          const meta = load(KEYS.projektMeta(state.projektId), null);
+          const liste = load(KEYS.projekte, []);
+          const e = liste.find(p => p.id === state.projektId);
+          if (e && meta && meta.titel) { e.name = meta.titel; save(KEYS.projekte, liste); }
+          Object.keys(KEYS).forEach(k => { if (typeof KEYS[k] === 'function') localStorage.removeItem(KEYS[k](kaputt)); });
+          console.info('ℹ️ Verirrte Projektdaten («[object Object]») ins aktuelle Projekt übernommen');
+          setTimeout(() => showFormatToast('🩹 Projektdaten aus dem fehlerhaften Zwischenspeicher zurückgeholt – bitte Cloud-Stand vergleichen'), 1500);
+        }
+      } catch (e) { console.warn('Rettung übersprungen:', e); }
+
       loadProjektDaten();
     }
 
@@ -3539,7 +3594,7 @@
       const projekte = load(KEYS.projekte, []);
       projekte.push({ id: projektId, name: 'Brandboden', erstellt: new Date().toISOString() });
       save(KEYS.projekte, projekte);
-      save(KEYS.aktuellesProjekt, projektId);
+      rebuAktuellesSetzen(projektId);
 
       // Demo-Figuren
       const demoFiguren = [
@@ -4294,7 +4349,7 @@ was morgen kommt – wer ist dabei?</p>
       editingProjekt = null;
       
       // Neues Projekt laden
-      save(KEYS.aktuellesProjekt, projektId);
+      rebuAktuellesSetzen(projektId);
       state.projektId = projektId;
       state.aktiveSzene = null;
       loadProjektDaten();
@@ -5106,7 +5161,7 @@ was morgen kommt – wer ist dabei?</p>
       const name = dramera?.data?.projektName || dramera?.data?.projektMeta?.titel || 'Importiertes Projekt';
 
       const projekte = load(KEYS.projekte, []);
-      let projekt = projekte.find(p => (p.name || p.titel) === name);
+      let projekt = projekte.filter(istRebuProjekt).find(p => (p.name || p.titel) === name);
       if (!projekt) {
         projekt = { id: genId(), name: name, erstellt: new Date().toISOString() };
         projekte.push(projekt);
@@ -7826,7 +7881,7 @@ HANDELN STATT NUR BESCHREIBEN:
     // ============================================
     // v2.0: Projekt-Liste Modal (Öffnen...)
     function renderProjektListeModal() {
-      const alleProjekte = load(KEYS.projekte, []);
+      const alleProjekte = rebuProjekte();   // Propla-Einträge (gleiche Web-Adresse) ausblenden
       
       // Projekte mit Cloud-Status markieren
       const projekteAngereichert = alleProjekte.map(p => ({
