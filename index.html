@@ -11,6 +11,7 @@
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.0/lame.all.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
     // PDF.js Worker konfigurieren
@@ -11543,25 +11544,124 @@ ${text}`;
     
     // AIFF ist das auf dem Mac übliche Aufnahmeformat, wird von Chrome aber nicht abgespielt –
     // weder im <audio>-Element noch über die Web-Audio-API (geprüft: decodeAudioData scheitert
-    // an AIFF-Dateien in Chrome, weil der Container dort gar nicht erst erkannt wird; eine
-    // Umwandlung im Browser ist damit nicht möglich). Safari spielt AIFF ab, Chrome nicht.
-    // Die Datei wird darum trotzdem angenommen und gespeichert (fürs Archiv, den Export und die
-    // Übergabe an andere Programme), aber mit einem klaren Hinweis zur Abspielbarkeit in Chrome.
+    // an AIFF-Dateien in Chrome, weil der Container den Dateityp dort gar nicht erst erkennt).
+    // Deshalb liest bereitsAiffZuMp3 die AIFF-Bytes selbst (COMM/SSND-Chunks, ohne Browser-Codec)
+    // und kodiert sie mit lamejs (reines JavaScript) zu MP3 um – das spielt überall ab.
+    // Klappt das ausnahmsweise nicht (z.B. komprimiertes AIFC, oder lamejs nicht geladen),
+    // wird die Originaldatei trotzdem gespeichert, mit Hinweis zur manuellen Umwandlung.
+    function parseAiff(ab) {
+      const dv = new DataView(ab);
+      const lies = (o, l) => String.fromCharCode(...new Uint8Array(ab, o, l));
+      if (lies(0, 4) !== 'FORM') throw new Error('Keine AIFF-Datei (FORM-Chunk fehlt)');
+      const formType = lies(8, 4);
+      if (formType !== 'AIFF' && formType !== 'AIFC') throw new Error('Kein AIFF/AIFC (' + formType + ')');
+      let pos = 12, comm = null, ssnd = null;
+      while (pos + 8 <= ab.byteLength) {
+        const id = lies(pos, 4);
+        const size = dv.getUint32(pos + 4, false);
+        const bodyStart = pos + 8;
+        if (id === 'COMM') {
+          const numChannels = dv.getInt16(bodyStart, false);
+          const bitsPerSample = dv.getInt16(bodyStart + 6, false);
+          // Samplerate: 80-Bit IEEE-754-Extended, big-endian (AIFF-eigenes Format)
+          const expo = dv.getUint16(bodyStart + 8, false);
+          const hi = dv.getUint32(bodyStart + 10, false);
+          const lo = dv.getUint32(bodyStart + 14, false);
+          const vorzeichen = expo & 0x8000 ? -1 : 1;
+          const exponent = (expo & 0x7fff) - 16383 - 63;
+          const mantisse = hi * Math.pow(2, 32) + lo;
+          const sampleRate = Math.round(vorzeichen * mantisse * Math.pow(2, exponent));
+          let compressionType = 'NONE';
+          if (formType === 'AIFC' && size > 18) compressionType = lies(bodyStart + 18, 4);
+          comm = { numChannels, bitsPerSample, sampleRate, compressionType };
+        } else if (id === 'SSND') {
+          const offset = dv.getUint32(bodyStart, false);
+          ssnd = { dataStart: bodyStart + 8 + offset, dataSize: size - 8 - offset };
+        }
+        pos = bodyStart + size + (size % 2); // Chunks sind auf gerade Länge gepolstert
+      }
+      if (!comm || !ssnd) throw new Error('COMM- oder SSND-Chunk fehlt');
+      const bigEndian = comm.compressionType !== 'sowt';
+      if (comm.compressionType !== 'NONE' && comm.compressionType !== 'sowt' && comm.compressionType.trim() !== '') {
+        throw new Error('Komprimiertes AIFC (' + comm.compressionType + ') wird nicht unterstützt');
+      }
+      const bytesPerSample = comm.bitsPerSample / 8;
+      const frameCount = Math.floor(ssnd.dataSize / (bytesPerSample * comm.numChannels));
+      const channels = []; for (let c = 0; c < comm.numChannels; c++) channels.push(new Int16Array(frameCount));
+      for (let i = 0; i < frameCount; i++) {
+        for (let c = 0; c < comm.numChannels; c++) {
+          const off = ssnd.dataStart + (i * comm.numChannels + c) * bytesPerSample;
+          let v16;
+          if (comm.bitsPerSample === 16) v16 = dv.getInt16(off, !bigEndian);
+          else if (comm.bitsPerSample === 8) v16 = dv.getInt8(off) * 256;
+          else if (comm.bitsPerSample === 24) {
+            let b0, b1, b2;
+            if (bigEndian) { b0 = dv.getUint8(off); b1 = dv.getUint8(off + 1); b2 = dv.getUint8(off + 2); }
+            else { b2 = dv.getUint8(off); b1 = dv.getUint8(off + 1); b0 = dv.getUint8(off + 2); }
+            let v = (b0 << 16) | (b1 << 8) | b2; if (v & 0x800000) v -= 0x1000000;
+            v16 = Math.max(-32768, Math.min(32767, Math.round(v / 256)));
+          } else if (comm.bitsPerSample === 32) {
+            v16 = Math.max(-32768, Math.min(32767, Math.round(dv.getInt32(off, !bigEndian) / 65536)));
+          } else throw new Error('Nicht unterstützte Bittiefe: ' + comm.bitsPerSample);
+          channels[c][i] = v16;
+        }
+      }
+      return { sampleRate: comm.sampleRate, numChannels: comm.numChannels, channels };
+    }
+
+    function aiffZuMp3Blob(aiff, kbps) {
+      if (!window.lamejs) throw new Error('MP3-Kodierer nicht geladen (keine Internetverbindung?)');
+      const encoder = new lamejs.Mp3Encoder(aiff.numChannels, aiff.sampleRate, kbps || 192);
+      const blockSize = 1152;
+      const teile = [];
+      const [links, rechts] = aiff.channels;
+      const laenge = links.length;
+      for (let i = 0; i < laenge; i += blockSize) {
+        const l = links.subarray(i, i + blockSize);
+        const buf = aiff.numChannels === 2 ? encoder.encodeBuffer(l, rechts.subarray(i, i + blockSize)) : encoder.encodeBuffer(l);
+        if (buf.length > 0) teile.push(buf);
+      }
+      const rest = encoder.flush();
+      if (rest.length > 0) teile.push(rest);
+      return new Blob(teile, { type: 'audio/mpeg' });
+    }
+
+    async function konvertiereAifZuMp3(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const aiff = parseAiff(arrayBuffer);
+      const mp3Blob = aiffZuMp3Blob(aiff, 192);
+      const neuerName = file.name.replace(/\.(aif|aiff)$/i, '') + '.mp3';
+      return new File([mp3Blob], neuerName, { type: 'audio/mpeg' });
+    }
+
     let __aifHinweisGezeigt = false;
-    function pruefeAifHinweis(ext) {
-      if ((ext !== 'aif' && ext !== 'aiff') || __aifHinweisGezeigt) return;
+    function pruefeAifHinweis() {
+      if (__aifHinweisGezeigt) return;
       __aifHinweisGezeigt = true;
-      alert('Diese Datei ist im AIFF-Format (typisch für Aufnahmen auf dem Mac).\n'
-        + 'Rebu speichert sie, aber Chrome kann AIFF nicht abspielen – Safari schon.\n\n'
+      alert('Diese AIFF-Datei konnte nicht automatisch nach MP3 umgewandelt werden.\n'
+        + 'Sie wird trotzdem gespeichert, lässt sich in Chrome aber möglicherweise nicht abspielen (Safari schon).\n\n'
         + 'Für die Wiedergabe in Chrome einmalig umwandeln, z.B.:\n'
         + '– QuickTime Player öffnen → Datei → Exportieren als → nur Audio (M4A), oder\n'
         + '– im Terminal: afconvert -f WAVE -d LEI16 datei.aiff datei.wav\n\n'
         + 'Die umgewandelte Datei dann hier hochladen.');
     }
 
+    async function verarbeiteAllfaelligesAiff(file) {
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      if (ext !== 'aif' && ext !== 'aiff') return file;
+      try {
+        const mp3 = await konvertiereAifZuMp3(file);
+        if (typeof showFormatToast === 'function') showFormatToast('🎵 AIFF nach MP3 umgewandelt');
+        return mp3;
+      } catch (e) {
+        console.warn('AIFF→MP3-Umwandlung fehlgeschlagen, Original wird gespeichert:', e);
+        pruefeAifHinweis();
+        return file;
+      }
+    }
+
     async function processFile(file) {
-      const extRoh = (file.name.split('.').pop() || '').toLowerCase();
-      pruefeAifHinweis(extRoh);
+      file = await verarbeiteAllfaelligesAiff(file);
 
       // MIME-Type prüfen
       let isAudio = file.type.startsWith('audio/');
@@ -11865,9 +11965,9 @@ ${text}`;
       input.type = 'file';
       input.accept = '.mp3,.wav,.ogg,.m4a,.aif,.aiff,.aac,.flac,.mp4,.mov,.avi,.webm,audio/*,video/*';
       input.onchange = async (e) => {
-        const file = e.target.files[0];
+        let file = e.target.files[0];
         if (file) {
-          pruefeAifHinweis((file.name.split('.').pop() || '').toLowerCase());
+          file = await verarbeiteAllfaelligesAiff(file);
           const medium = state.medien.find(m => m.id === mediumId);
           if (medium) {
             medium.filename = file.name;
