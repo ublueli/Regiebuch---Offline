@@ -11505,7 +11505,7 @@ ${text}`;
       // Neues Input-Element erstellen
       globalFileInput = document.createElement('input');
       globalFileInput.type = 'file';
-      globalFileInput.accept = '.mp3,.wav,.ogg,.m4a,.mp4,.mov,.avi,.webm,audio/*,video/*';
+      globalFileInput.accept = '.mp3,.wav,.ogg,.m4a,.aif,.aiff,.aac,.flac,.mp4,.mov,.avi,.webm,audio/*,video/*';
       globalFileInput.style.display = 'none';
       document.body.appendChild(globalFileInput);
       
@@ -11541,7 +11541,28 @@ ${text}`;
       if (file) processFile(file);
     }
     
+    // AIFF ist das auf dem Mac übliche Aufnahmeformat, wird von Chrome aber nicht abgespielt –
+    // weder im <audio>-Element noch über die Web-Audio-API (geprüft: decodeAudioData scheitert
+    // an AIFF-Dateien in Chrome, weil der Container dort gar nicht erst erkannt wird; eine
+    // Umwandlung im Browser ist damit nicht möglich). Safari spielt AIFF ab, Chrome nicht.
+    // Die Datei wird darum trotzdem angenommen und gespeichert (fürs Archiv, den Export und die
+    // Übergabe an andere Programme), aber mit einem klaren Hinweis zur Abspielbarkeit in Chrome.
+    let __aifHinweisGezeigt = false;
+    function pruefeAifHinweis(ext) {
+      if ((ext !== 'aif' && ext !== 'aiff') || __aifHinweisGezeigt) return;
+      __aifHinweisGezeigt = true;
+      alert('Diese Datei ist im AIFF-Format (typisch für Aufnahmen auf dem Mac).\n'
+        + 'Rebu speichert sie, aber Chrome kann AIFF nicht abspielen – Safari schon.\n\n'
+        + 'Für die Wiedergabe in Chrome einmalig umwandeln, z.B.:\n'
+        + '– QuickTime Player öffnen → Datei → Exportieren als → nur Audio (M4A), oder\n'
+        + '– im Terminal: afconvert -f WAVE -d LEI16 datei.aiff datei.wav\n\n'
+        + 'Die umgewandelte Datei dann hier hochladen.');
+    }
+
     async function processFile(file) {
+      const extRoh = (file.name.split('.').pop() || '').toLowerCase();
+      pruefeAifHinweis(extRoh);
+
       // MIME-Type prüfen
       let isAudio = file.type.startsWith('audio/');
       let isVideo = file.type.startsWith('video/');
@@ -11549,7 +11570,7 @@ ${text}`;
       // Fallback: Dateiendung prüfen (für Dateien ohne MIME-Type)
       if (!isAudio && !isVideo) {
         const ext = file.name.split('.').pop().toLowerCase();
-        const audioExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'wma'];
+        const audioExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'wma', 'aif', 'aiff'];
         const videoExtensions = ['mp4', 'mov', 'avi', 'webm', 'mkv', 'm4v', 'wmv'];
         
         if (audioExtensions.includes(ext)) {
@@ -11842,10 +11863,11 @@ ${text}`;
     function reloadLocalFile(mediumId) {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = 'audio/*,video/*';
+      input.accept = '.mp3,.wav,.ogg,.m4a,.aif,.aiff,.aac,.flac,.mp4,.mov,.avi,.webm,audio/*,video/*';
       input.onchange = async (e) => {
         const file = e.target.files[0];
         if (file) {
+          pruefeAifHinweis((file.name.split('.').pop() || '').toLowerCase());
           const medium = state.medien.find(m => m.id === mediumId);
           if (medium) {
             medium.filename = file.name;
