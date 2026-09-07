@@ -2851,6 +2851,17 @@
       b: { name: 'Bühne', prefix: 'B', class: 'cue-b', icon: '🎪' },
       u: { name: 'Umbau', prefix: 'U', class: 'cue-u', icon: '🔄' },
     };
+    const CUE_TYP_REIHENFOLGE = Object.keys(CUE_TYPEN);
+    // Sortiert Cues zuerst nach Art (Reihenfolge wie in CUE_TYPEN), dann numerisch nach Nummer (tiefste zuerst)
+    function sortCuesNachArtUndNummer(a, b) {
+      const artA = CUE_TYP_REIHENFOLGE.indexOf(a.typ);
+      const artB = CUE_TYP_REIHENFOLGE.indexOf(b.typ);
+      if (artA !== artB) return artA - artB;
+      const numA = parseFloat(a.nummer);
+      const numB = parseFloat(b.nummer);
+      if (isNaN(numA) || isNaN(numB)) return String(a.nummer).localeCompare(String(b.nummer), undefined, { numeric: true });
+      return numA - numB;
+    }
     
     // Gruppen/Akte: Nur noch frei editierbare Liste in state.projektMeta.eigeneGruppen
     // z.B. ['Erster Akt', 'Zweiter Akt', 'Dritter Akt'] oder ['Teil 1']
@@ -3795,6 +3806,7 @@ was morgen kommt – wer ist dabei?</p>
       (function(pid) {
         loadProjectDataFromDB(pid).then(record => {
           if (state.projektId !== pid || _projektLoadToken !== myToken) return; // inzwischen gewechselt
+          if (state.dirty) return; // Nutzer hat inzwischen schon gespeichert – dieser (evtl. veraltete) IndexedDB-Stand darf frischere Änderungen nicht überschreiben
           if (record && record.daten) {
             const bereiche = ['projektMeta', 'figuren', 'szenen', 'textbuch', 'cues',
               'requisiten', 'kostueme', 'medien', 'buehne', 'konzept', 'beziehungen',
@@ -8991,7 +9003,7 @@ HANDELN STATT NUR BESCHREIBEN:
       
       const szene = state.szenen.find(s => s.id === state.aktiveSzene);
       let content = state.textbuch[state.aktiveSzene] || '';
-      const szeneCues = state.cues.filter(c => c.szeneId === state.aktiveSzene);
+      const szeneCues = state.cues.filter(c => c.szeneId === state.aktiveSzene).sort(sortCuesNachArtUndNummer);
       const szeneFiguren = szene?.figuren?.map(fId => state.figuren.find(f => f.id === fId)).filter(Boolean) || [];
       
       // In Technik-Ansicht: Cue-Marker im Text anzeigen
@@ -18156,7 +18168,15 @@ ${chunkText}`;
         }
       }
       
-      // Bei Medien-Cue: Szene von Medium entfernen  
+      // Bei Kostüm-Cue: Szene von Kostüm entfernen
+      if (cue?.kostuemId && cue.szeneId) {
+        const kost = state.kostueme.find(k => k.id === cue.kostuemId);
+        if (kost?.szenen) {
+          kost.szenen = kost.szenen.filter(s => s !== cue.szeneId);
+        }
+      }
+
+      // Bei Medien-Cue: Szene von Medium entfernen
       if (cue?.mediumId && cue.szeneId) {
         const med = state.medien.find(m => m.id === cue.mediumId);
         if (med?.szenen) {
