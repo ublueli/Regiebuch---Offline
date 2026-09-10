@@ -8007,16 +8007,6 @@ HANDELN STATT NUR BESCHREIBEN:
         app.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=file]):not([list]), textarea')
            .forEach(function (el) {
              if (!el.hasAttribute('autocomplete')) el.setAttribute('autocomplete', 'off');
-             // Chrome fuellt Felder mit Beschriftungen wie «Ort» oder «Zeit» trotz
-             // autocomplete=off aus dem Adressprofil (Strasse, Ort ...). Ein Feld,
-             // das bis zum ersten Fokus schreibgeschuetzt ist, laesst Chrome in Ruhe.
-             if (el.tagName === 'INPUT' && !el.readOnly && !el.dataset.afGuard) {
-               el.dataset.afGuard = '1';
-               el.setAttribute('readonly', 'readonly');
-               var frei = function () { el.removeAttribute('readonly'); };
-               el.addEventListener('focus', frei);
-               el.addEventListener('pointerdown', frei);
-             }
            });
       } catch (e) {}
 
@@ -8465,84 +8455,9 @@ HANDELN STATT NUR BESCHREIBEN:
                   ${t.label}
                 </button>`).join('')}
             </div>
-            ${(tab === 'matrix' || tab === 'auftritte') ? `
-              <div class="flex justify-end mb-3">
-                <button class="btn btn-sm btn-outline" onclick="${tab === 'matrix' ? 'exportFigurenSzenenMatrix()' : 'exportAuftrittsListe()'}">📄 Exportieren (HTML / PDF)</button>
-              </div>` : ''}
             ${inner}
           </div>
         </div>`;
-    }
-
-    // --- Export: Figuren-Szenen-Matrix als druckbare HTML-Datei ---
-    function exportFigurenSzenenMatrix() {
-      const szenen = state.szenen || [];
-      const figuren = state.figuren || [];
-      if (szenen.length === 0 || figuren.length === 0) { alert('Für die Matrix brauchst du mindestens eine Figur und eine Szene.'); return; }
-      const drin = (s, f) => (s.figuren || []).includes(f.id);
-      let html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Figuren-Szenen-Matrix - ${escapeHtml(state.projektMeta.titel || '')}</title>
-        <style>
-          body{font-family:Arial,sans-serif;padding:20px;margin:0 auto;}
-          table{border-collapse:collapse;font-size:11px;}
-          th,td{border:1px solid #ccc;padding:3px 5px;text-align:center;}
-          th{background:#f5f5f5;}
-          th.fig{text-align:left;white-space:nowrap;}
-          td.x{background:#2563eb;color:#fff;font-weight:bold;}
-          td.o{color:#ccc;}
-          h1{margin-bottom:5px;}
-          .legende{font-size:11px;color:#666;margin-top:10px;}
-          @media print { .no-print{display:none;} @page{size:landscape;} }
-        </style></head><body>`;
-      html += `<div class="no-print" style="margin-bottom:20px;"><button onclick="window.print()" style="padding:10px 20px;font-size:16px;">🖨️ Als PDF drucken</button></div>`;
-      html += `<h1>Figuren-Szenen-Matrix: ${escapeHtml(state.projektMeta.titel || '')}</h1>`;
-      html += `<p>Erstellt: ${new Date().toLocaleDateString('de-CH')}</p>`;
-      html += `<table><tr><th class="fig">Figur \\ Szene</th>${szenen.map(s => `<th title="${escapeHtml(s.titel || '')}">${escapeHtml(s.nummer || '·')}</th>`).join('')}<th>Σ</th></tr>`;
-      figuren.forEach(f => {
-        const anzahl = szenen.filter(s => drin(s, f)).length;
-        html += `<tr><th class="fig">${escapeHtml(f.kuerzel || '')} <span style="font-weight:normal;color:#666;">${escapeHtml(f.name || '')}</span></th>`;
-        html += szenen.map(s => drin(s, f) ? '<td class="x">●</td>' : '<td class="o">·</td>').join('');
-        html += `<td><strong>${anzahl}</strong></td></tr>`;
-      });
-      html += `<tr><th class="fig">Figuren je Szene</th>${szenen.map(s => `<td>${(s.figuren || []).length}</td>`).join('')}<td></td></tr></table>`;
-      html += `<p class="legende">● = Figur ist in der Szene. Rechte Spalte: Szenen je Figur. Letzte Zeile: Figuren je Szene.</p>`;
-      html += `</body></html>`;
-      openExportWindow(html, 'Figuren-Szenen-Matrix');
-    }
-
-    // --- Export: Auftritte & Abgänge als druckbare Liste ---
-    function exportAuftrittsListe() {
-      const szenen = state.szenen || [];
-      if (szenen.length === 0) { alert('Noch keine Szenen vorhanden.'); return; }
-      const figById = id => state.figuren.find(f => f.id === id);
-      const present = szenen.map(s => (s.figuren || []).map(figById).filter(Boolean));
-      const namen = arr => arr.map(f => escapeHtml(f.name || f.kuerzel || '?')).join(', ') || '–';
-      let html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Auftritte und Abgänge - ${escapeHtml(state.projektMeta.titel || '')}</title>
-        <style>
-          body{font-family:Arial,sans-serif;padding:20px;max-width:900px;margin:0 auto;}
-          table{border-collapse:collapse;width:100%;}
-          th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top;font-size:12px;}
-          th{background:#f5f5f5;}
-          td.nr{font-family:monospace;white-space:nowrap;}
-          td.auf{color:#047857;} td.ab{color:#b45309;}
-          h1{margin-bottom:5px;}
-          .hinweis{font-size:11px;color:#666;margin-bottom:10px;}
-          @media print { .no-print{display:none;} }
-        </style></head><body>`;
-      html += `<div class="no-print" style="margin-bottom:20px;"><button onclick="window.print()" style="padding:10px 20px;font-size:16px;">🖨️ Als PDF drucken</button></div>`;
-      html += `<h1>Auftritte und Abgänge: ${escapeHtml(state.projektMeta.titel || '')}</h1>`;
-      html += `<p>Erstellt: ${new Date().toLocaleDateString('de-CH')}</p>`;
-      html += `<p class="hinweis">Abgeleitet aus der Figuren-Zuordnung je Szene: «Auftritt» = neu gegenüber der vorherigen Szene, «Abgang» = nicht mehr in der nächsten Szene. Feinheiten innerhalb einer Szene stehen im Textbuch.</p>`;
-      html += `<table><tr><th>Nr.</th><th>Szene</th><th>Auf der Bühne</th><th>Auftritt</th><th>Abgang</th></tr>`;
-      szenen.forEach((s, i) => {
-        const jetzt = present[i];
-        const vorherIds = new Set((i > 0 ? present[i - 1] : []).map(f => f.id));
-        const nachherIds = new Set((i < szenen.length - 1 ? present[i + 1] : []).map(f => f.id));
-        const auftritt = jetzt.filter(f => !vorherIds.has(f.id));
-        const abgang = jetzt.filter(f => !nachherIds.has(f.id));
-        html += `<tr><td class="nr">${escapeHtml(s.nummer || '')}</td><td><strong>${escapeHtml(s.titel || '')}</strong>${(s.ort || s.zeit) ? `<br><span style="color:#888;">${escapeHtml([s.ort, s.zeit].filter(Boolean).join(' / '))}</span>` : ''}</td><td>${namen(jetzt)}</td><td class="auf">${namen(auftritt)}</td><td class="ab">${namen(abgang)}</td></tr>`;
-      });
-      html += `</table></body></html>`;
-      openExportWindow(html, 'Auftritte-Abgaenge');
     }
 
     // --- Figuren-Szenen-Matrix ---
@@ -10557,7 +10472,12 @@ ${text}`;
                     ${isPlaying ? '⏸️' : '▶️'}
                   </button>
                 ` : m.source === 'local' ? `
-                  <button class="btn btn-xs btn-outline" onclick="reloadLocalFile('${m.id}')" title="Datei laden">
+                  ${cloudUser ? `
+                  <button class="btn btn-xs btn-outline" onclick="cloudMediumNachladen('${m.id}')" title="Aus Cloud laden">
+                    ☁️
+                  </button>
+                  ` : ''}
+                  <button class="btn btn-xs btn-outline" onclick="reloadLocalFile('${m.id}')" title="${cloudUser ? 'Datei von Festplatte wählen' : 'Datei laden'}">
                     📂
                   </button>
                 ` : ''}
@@ -11951,8 +11871,13 @@ ${text}`;
                     ${isPlaying ? '⏸️ Pause' : '▶️ Play'}
                   </button>
                 ` : medium.source === 'local' ? `
+                  ${cloudUser ? `
+                  <button class="btn btn-sm btn-outline" onclick="cloudMediumNachladen('${medium.id}')">
+                    ☁️ Aus Cloud laden
+                  </button>
+                  ` : ''}
                   <button class="btn btn-sm btn-outline" onclick="reloadLocalFile('${medium.id}')">
-                    📂 Datei neu laden
+                    📂 Datei ${cloudUser ? 'von Festplatte wählen' : 'neu laden'}
                   </button>
                 ` : ''}
                 
@@ -12054,6 +11979,45 @@ ${text}`;
 
         renumberCuesInOrder(['lx', 'q']);
         saveProjektDaten();
+      }
+    }
+
+    // Eine einzelne fehlende/kaputte Mediendatei gezielt nochmals aus der Cloud
+    // laden (statt wie reloadLocalFile() die Festplatte zu öffnen). Wird nur
+    // angeboten, wenn eine Cloud-Produktion angemeldet ist.
+    async function cloudMediumNachladen(mediumId) {
+      if (!cloudUser) { reloadLocalFile(mediumId); return; }
+      const medium = state.medien.find(m => m.id === mediumId);
+      if (!medium) return;
+
+      showFormatToast('⬇️ Datei wird aus der Cloud geladen …');
+      try {
+        const { data: eintraege, error: listErr } = await db.from('rebu_medien').select('*').eq('medium_id', mediumId);
+        const eintrag = eintraege && eintraege[0];
+        if (listErr || !eintrag) {
+          showFormatToast('⚠️ Diese Datei ist nicht in der Cloud hinterlegt.');
+          return;
+        }
+        const { data: blob, error } = await db.storage.from('rebu-medien')
+          .download(cloudUser.id + '/' + mediumId);
+        if (error || !blob) {
+          showFormatToast('⚠️ Laden aus der Cloud fehlgeschlagen.');
+          return;
+        }
+        const datei = new File([blob], eintrag.dateiname || medium.filename || mediumId, { type: eintrag.mime || blob.type });
+        if (eintrag.art === 'bild') {
+          await saveImageToDB(mediumId, datei);
+        } else {
+          await saveAudioToDB(mediumId, datei);
+          medium.localFileUrl = createTrackedObjectURL(datei);
+          medium.audioStored = true;
+        }
+        saveProjektDaten();
+        render();
+        showFormatToast('✅ Datei geladen');
+      } catch (e) {
+        console.warn('Einzelnes Medium aus Cloud laden fehlgeschlagen:', mediumId, e);
+        showFormatToast('⚠️ Laden aus der Cloud fehlgeschlagen.');
       }
     }
 
@@ -12201,35 +12165,18 @@ ${text}`;
       });
     }
     
-    // Referenz auf das Audio/Video-Element der unteren Leiste, damit render()
-    // die laufende Wiedergabe (Position + Tempo) nicht verliert
-    var bottomMediaEl = null;
-    var bottomMediaId = null;
-
-    // Gewähltes Tempo bei jedem Start eines Audio/Video-Elements anwenden
-    // (Capture-Phase, weil Media-Events nicht bubbeln). Deckt auch die
-    // Player in der Medien-Ansicht und die nativen Play-Knöpfe ab.
-    ['play', 'loadedmetadata'].forEach(evName => {
-      document.addEventListener(evName, e => {
-        const el = e.target;
-        if (!el || (el.tagName !== 'AUDIO' && el.tagName !== 'VIDEO')) return;
-        const rate = parseFloat(state.playbackRate) || 1;
-        if (Math.abs(el.playbackRate - rate) > 0.001) {
-          try { el.playbackRate = rate; } catch (err) {}
-        }
-      }, true);
-    });
-
     // Bottom-Player im Textbuch: volle Breite am unteren Rand der Schreibfläche
     function updateBottomPlayer() {
       let container = document.getElementById('bottom-player-bar');
       
-      const medium = state.currentlyPlaying ? state.medien.find(m => m.id === state.currentlyPlaying) : null;
+      if (!state.currentlyPlaying) {
+        if (container) container.remove();
+        return;
+      }
+      
+      const medium = state.medien.find(m => m.id === state.currentlyPlaying);
       if (!medium) {
         if (container) container.remove();
-        if (bottomMediaEl) { try { bottomMediaEl.pause(); } catch (e) {} }
-        bottomMediaEl = null;
-        bottomMediaId = null;
         return;
       }
       
@@ -12243,74 +12190,49 @@ ${text}`;
       const editorColumn = document.querySelector('.flex-1.flex.flex-col.overflow-hidden');
       if (!editorColumn) return;
       
-      // Leiste existiert schon für dieses Medium → nur Tempo-Knöpfe auffrischen,
-      // das Audio-Element nicht neu bauen (sonst springt die Wiedergabe auf 0
-      // und das Tempo auf 1.0 zurück)
-      if (container && container.dataset.mediumId === medium.id && container.querySelector('#bottom-media-player')) {
-        updatePlayButtons();
-        return;
-      }
-
       if (!container) {
         container = document.createElement('div');
         container.id = 'bottom-player-bar';
         editorColumn.appendChild(container);
       }
-      container.dataset.mediumId = medium.id;
-
+      
       container.style.cssText = 'padding: 8px 16px; background: #eff6ff; border-top: 2px solid #3b82f6; display: flex; align-items: center; gap: 12px;';
-
-      const tempoButtons = ['0.5', '0.75', '1.0', '1.25', '1.5'].map(rate =>
-        `<button onclick="setPlaybackRate(${rate})" data-tempo-btn="${rate}"
+      
+      const tempoButtons = ['0.5', '0.75', '1.0', '1.25', '1.5'].map(rate => 
+        `<button onclick="setPlaybackRate(${rate})" data-tempo-btn="${rate}" 
                 style="padding: 2px 6px; font-size: 11px; border-radius: 4px; border: 1px solid #cbd5e1; cursor: pointer;
                        background: ${state.playbackRate == rate ? '#3b82f6' : '#fff'}; color: ${state.playbackRate == rate ? '#fff' : '#374151'};"
                 >${rate}x</button>`
       ).join('');
-
+      
       container.innerHTML = `
         <div style="display: flex; align-items: center; gap: 6px; white-space: nowrap;">
           <span style="font-size: 16px;">🎵</span>
           <span style="font-size: 12px; color: #1e40af; font-weight: 500; max-width: 150px; overflow: hidden; text-overflow: ellipsis;">${medium.name}</span>
         </div>
-        <span id="bottom-media-slot" style="flex: 1; min-width: 0; display: flex;"></span>
+        <${medium.type === 'audio' ? 'audio' : 'video'} id="bottom-media-player" controls 
+            src="${src}" style="flex: 1; height: ${medium.type === 'audio' ? '36px' : '48px'}; min-width: 0;"></${medium.type === 'audio' ? 'audio' : 'video'}>
         <div style="display: flex; gap: 3px; align-items: center;">
           ${tempoButtons}
         </div>
-        <button onclick="togglePlayMedium('${medium.id}')"
+        <button onclick="togglePlayMedium('${medium.id}')" 
                 style="padding: 4px 8px; font-size: 12px; border-radius: 4px; border: 1px solid #cbd5e1; cursor: pointer; background: #fff;">
           ⏹️
         </button>
       `;
-
-      // Media-Element: bestehendes wiederverwenden (überlebt render()), sonst neu anlegen
-      let playerEl = bottomMediaEl;
-      if (!playerEl || bottomMediaId !== medium.id || playerEl.getAttribute('src') !== src) {
-        if (playerEl) { try { playerEl.pause(); } catch (e) {} }
-        playerEl = document.createElement(medium.type === 'audio' ? 'audio' : 'video');
-        playerEl.id = 'bottom-media-player';
-        playerEl.controls = true;
-        playerEl.src = src;
-        playerEl.style.cssText = `flex: 1; height: ${medium.type === 'audio' ? '36px' : '48px'}; min-width: 0;`;
-        playerEl.defaultPlaybackRate = state.playbackRate;
-        playerEl.playbackRate = state.playbackRate;
-        // Tempo nach jedem (Neu-)Laden und bei jedem Start wieder anwenden
-        const applyRate = () => {
-          if (Math.abs(playerEl.playbackRate - state.playbackRate) > 0.001) {
-            playerEl.playbackRate = state.playbackRate;
-          }
-        };
-        playerEl.addEventListener('loadedmetadata', applyRate);
-        playerEl.addEventListener('play', applyRate);
+      
+      // Event: Wenn fertig gespielt, aufräumen
+      const playerEl = container.querySelector('#bottom-media-player');
+      if (playerEl) {
         playerEl.addEventListener('ended', () => {
           state.currentlyPlaying = null;
           updatePlayButtons();
           updateBottomPlayer();
         });
-        bottomMediaEl = playerEl;
-        bottomMediaId = medium.id;
+        playerEl.addEventListener('pause', () => {
+          // Nur wenn nicht manuell gestoppt
+        });
       }
-      container.querySelector('#bottom-media-slot').appendChild(playerEl);
-      playerEl.playbackRate = state.playbackRate;
     }
     
     // Nur die Play-Buttons aktualisieren, ohne render()
@@ -12326,38 +12248,30 @@ ${text}`;
       // Tempo-Buttons aktualisieren
       document.querySelectorAll('[data-tempo-btn]').forEach(btn => {
         const rate = btn.getAttribute('data-tempo-btn');
-        const active = Math.abs(parseFloat(rate) - parseFloat(state.playbackRate)) < 0.001;
-        if (btn.closest('#bottom-player-bar')) {
-          // Knöpfe der unteren Leiste sind inline gestylt
-          btn.style.background = active ? '#3b82f6' : '#fff';
-          btn.style.color = active ? '#fff' : '#374151';
-        } else {
-          btn.className = btn.className.replace(/btn-primary|btn-outline/g, '').trim();
-          btn.classList.add(active ? 'btn-primary' : 'btn-outline');
-        }
+        btn.className = btn.className.replace(/btn-primary|btn-outline/g, '').trim();
+        btn.classList.add(state.playbackRate == rate ? 'btn-primary' : 'btn-outline');
       });
     }
-
+    
     function setPlaybackRate(rate) {
-      rate = parseFloat(rate);
-      if (!isFinite(rate) || rate <= 0) return;
       state.playbackRate = rate;
-
-      // Auf allen Media-Elementen setzen (auch wenn gerade nichts spielt,
-      // damit der nächste Start das gewählte Tempo hat)
-      document.querySelectorAll('audio, video').forEach(el => {
-        try {
-          el.defaultPlaybackRate = rate;
-          el.playbackRate = rate;
-        } catch (e) {}
-      });
-      if (bottomMediaEl) {
-        try { bottomMediaEl.defaultPlaybackRate = rate; bottomMediaEl.playbackRate = rate; } catch (e) {}
+      
+      // Auf allen aktiven Media-Elementen setzen
+      if (state.currentlyPlaying) {
+        const mediaElement = document.getElementById('media-' + state.currentlyPlaying);
+        if (mediaElement && mediaElement.playbackRate !== undefined) {
+          mediaElement.playbackRate = rate;
+        }
+        // Auch Bottom-Player
+        const bottomPlayer = document.getElementById('bottom-media-player');
+        if (bottomPlayer && bottomPlayer.playbackRate !== undefined) {
+          bottomPlayer.playbackRate = rate;
+        }
       }
-
-      // Nur die Knöpfe auffrischen – die Leiste NICHT neu bauen,
-      // sonst wird das Audio-Element ersetzt und das Tempo geht verloren
+      
       updatePlayButtons();
+      // Bottom-Player Tempo-Buttons aktualisieren
+      updateBottomPlayer();
     }
     
     async function deleteMedium(mediumId) {
@@ -16126,11 +16040,11 @@ ${chunkText}`;
           state.figuren.forEach(f => {
             const nameRuns = [new TextRun({ text: f.name.toUpperCase(), bold: true, size: 20, font: 'Trebuchet MS', color: '212121' })];
             if (f.kuerzel) nameRuns.push(new TextRun({ text: ' (' + f.kuerzel + ')', size: 20, font: 'Trebuchet MS', color: '212121' }));
-            children.push(new Paragraph({ children: nameRuns, spacing: { before: 120, after: 20 }, contextualSpacing: false }));
+            children.push(new Paragraph({ children: nameRuns, spacing: { before: 120, after: 20 } }));
             if (f.beschreibung) {
               children.push(new Paragraph({
                 children: [new TextRun({ text: f.beschreibung, size: 20, font: 'Georgia', italics: true, color: '555555' })],
-                spacing: { after: 120 },
+                spacing: { after: 80 },
                 indent: { left: 280 }
               }));
             }
@@ -16157,7 +16071,7 @@ ${chunkText}`;
           if (szene.ort || szene.zeit) {
             headerRuns.push(new TextRun({ text: '  –  ' + [szene.ort, szene.zeit].filter(Boolean).join(' / '), size: 18, color: '888888', font: 'Trebuchet MS', italics: true }));
           }
-          children.push(new Paragraph({ children: headerRuns, spacing: { before: 120, after: 20 }, contextualSpacing: false }));
+          children.push(new Paragraph({ children: headerRuns, spacing: { before: 100, after: 20 } }));
           
           if (figurenNamen) {
             children.push(new Paragraph({
@@ -16165,7 +16079,7 @@ ${chunkText}`;
                 new TextRun({ text: 'Figuren: ', bold: true, size: 18, color: '888888', font: 'Trebuchet MS' }),
                 new TextRun({ text: figurenNamen, size: 18, color: '888888', font: 'Trebuchet MS' })
               ],
-              spacing: { after: szene.zusammenfassung ? 20 : 120 },
+              spacing: { after: 20 },
               indent: { left: 400 }
             }));
           }
@@ -16173,7 +16087,7 @@ ${chunkText}`;
           if (szene.zusammenfassung) {
             children.push(new Paragraph({
               children: [new TextRun({ text: szene.zusammenfassung, italics: true, size: 18, color: '999999', font: 'Georgia' })],
-              spacing: { after: 120 },
+              spacing: { after: 60 },
               indent: { left: 400 }
             }));
           }
