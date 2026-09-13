@@ -5034,6 +5034,7 @@ was morgen kommt – wer ist dabei?</p>
               zeit: f.zeit || '',
               figuren: f.figuren || [],
               zusammenfassung: f.zusammenfassung || '',
+              bemerkungen: f.bemerkungen || '',
             }));
             
             d.felder.forEach(f => {
@@ -5259,6 +5260,7 @@ was morgen kommt – wer ist dabei?</p>
             position: state.szenen.indexOf(s),
             figuren: s.figuren,
             zusammenfassung: s.zusammenfassung,
+            bemerkungen: s.bemerkungen || '',
             inhalt: state.textbuch[s.id] || ''
           })),
           cues: JSON.parse(JSON.stringify(state.cues || [])),
@@ -15499,7 +15501,7 @@ ${chunkText}`;
     // TEXTFASSUNG EXPORT (Word & PDF)
     // ============================================
     
-    async function generateTextfassungHTML(szenenFilter = null) {
+    async function generateTextfassungHTML(szenenFilter = null, includeNotes = false) {
       const meta = { ...state.projektMeta };
       // Titelbild aus IndexedDB auflösen für Export
       if (meta.titelbild && meta.titelbild.startsWith('idb:')) {
@@ -15830,6 +15832,7 @@ ${chunkText}`;
                 </div>
               ` : ''}
               ${szene.zusammenfassung ? `<div style="font-style:italic;color:#999;font-size:10pt;margin:0.2cm 0 0.4cm;">${szene.zusammenfassung}</div>` : ''}
+              ${includeNotes && szene.bemerkungen ? `<div style="background:#fffbeb;border-left:3px solid #fbbf24;padding:0.15cm 0.3cm;margin:0.1cm 0 0.4cm;font-size:9.5pt;color:#92400e;">📝 <strong>Proben-Notiz:</strong> ${szene.bemerkungen}</div>` : ''}
               <div class="szene-text">${content}</div>
             </div>
           `;
@@ -15857,6 +15860,7 @@ ${chunkText}`;
             </div>
           ` : ''}
           ${szene.zusammenfassung ? `<div style="font-style:italic;color:#999;font-size:10pt;margin:0.2cm 0 0.4cm;">${szene.zusammenfassung}</div>` : ''}
+          ${includeNotes && szene.bemerkungen ? `<div style="background:#fffbeb;border-left:3px solid #fbbf24;padding:0.15cm 0.3cm;margin:0.1cm 0 0.4cm;font-size:9.5pt;color:#92400e;">📝 <strong>Proben-Notiz:</strong> ${szene.bemerkungen}</div>` : ''}
           <div class="szene-text">${content}</div>
         </div>
       `;
@@ -15900,9 +15904,39 @@ ${chunkText}`;
       exportDocx(true);
     }
     
+    let _exportIncludeNotes = false;
+    function askExportNotes() {
+      return new Promise(function(resolve) {
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#fff;border-radius:12px;padding:20px 22px;max-width:340px;box-shadow:0 10px 40px rgba(0,0,0,0.25);font-family:sans-serif;';
+        box.innerHTML = '<div style="font-weight:600;font-size:15px;margin-bottom:6px;color:#374151;">Proben-Notizen</div><div style="font-size:13px;color:#6b7280;margin-bottom:16px;line-height:1.5;">Sollen die Proben-Notizen der Szenen in den Export aufgenommen werden?</div>';
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;';
+        function mk(label, val, primary) {
+          var b = document.createElement('button');
+          b.textContent = label;
+          b.style.cssText = 'flex:1;padding:9px 12px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid ' + (primary ? '#a87159' : '#e5e7eb') + ';background:' + (primary ? '#a87159' : '#fff') + ';color:' + (primary ? '#fff' : '#374151') + ';';
+          b.onclick = function() { document.body.removeChild(overlay); resolve(val); };
+          return b;
+        }
+        row.appendChild(mk('Mit Proben-Notizen', true, true));
+        row.appendChild(mk('Ohne Notizen', false, false));
+        var cancel = document.createElement('button');
+        cancel.textContent = 'Abbrechen';
+        cancel.style.cssText = 'width:100%;margin-top:10px;padding:7px;border-radius:8px;font-size:12px;cursor:pointer;border:none;background:transparent;color:#9ca3af;';
+        cancel.onclick = function() { document.body.removeChild(overlay); resolve(null); };
+        box.appendChild(row); box.appendChild(cancel); overlay.appendChild(box); document.body.appendChild(overlay);
+      });
+    }
+
     async function exportDocx(includeCues) {
       // Aktuelle Szene aus Editor synchronisieren
       saveCurrentText();
+      const includeNotes = await askExportNotes();
+      if (includeNotes === null) { closeModal('showExportModal'); return; }
+      _exportIncludeNotes = includeNotes;
       const meta = { ...state.projektMeta };
       // Titelbild aus IndexedDB auflösen für Export
       if (meta.titelbild && meta.titelbild.startsWith('idb:')) {
@@ -16291,6 +16325,16 @@ ${chunkText}`;
         }));
       }
       
+      if (_exportIncludeNotes && szene.bemerkungen) {
+        children.push(new Paragraph({
+          children: [
+            new TextRun({ text: 'Proben-Notiz: ', bold: true, italics: true, size: 18, color: 'B45309', font: 'Trebuchet MS' }),
+            new TextRun({ text: szene.bemerkungen, italics: true, size: 18, color: 'B45309', font: 'Trebuchet MS' })
+          ],
+          indent: { left: 400 },
+          spacing: { before: 40, after: 160 }
+        }));
+      }
       children.push(new Paragraph({ spacing: { before: 80 }, children: [] }));
       
       const szeneCues = includeCues ? state.cues.filter(c => c.szeneId === szene.id) : [];
@@ -16673,8 +16717,12 @@ ${chunkText}`;
         printWindow.document.write('<html><body style="font-family:sans-serif;text-align:center;padding-top:40vh;color:#888;"><p>⏳ Druckvorschau wird erstellt...</p></body></html>');
       }
       
+      // Notizen-Abfrage (Fenster ist bereits offen, Nutzer-Geste bleibt erhalten)
+      const includeNotes = await askExportNotes();
+      if (includeNotes === null) { if (printWindow) printWindow.close(); closeModal('showExportModal'); return; }
+      
       // Dann HTML generieren (async)
-      const html = await generateTextfassungHTML();
+      const html = await generateTextfassungHTML(null, includeNotes);
       
       if (!printWindow) {
         // Popup blockiert → Fallback: als Blob-URL öffnen
