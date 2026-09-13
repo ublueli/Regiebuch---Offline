@@ -10472,7 +10472,12 @@ ${text}`;
                     ${isPlaying ? '⏸️' : '▶️'}
                   </button>
                 ` : m.source === 'local' ? `
-                  <button class="btn btn-xs btn-outline" onclick="reloadLocalFile('${m.id}')" title="Datei laden">
+                  ${cloudUser ? `
+                  <button class="btn btn-xs btn-outline" onclick="cloudMediumNachladen('${m.id}')" title="Aus Cloud laden">
+                    ☁️
+                  </button>
+                  ` : ''}
+                  <button class="btn btn-xs btn-outline" onclick="reloadLocalFile('${m.id}')" title="${cloudUser ? 'Datei von Festplatte wählen' : 'Datei laden'}">
                     📂
                   </button>
                 ` : ''}
@@ -11866,8 +11871,13 @@ ${text}`;
                     ${isPlaying ? '⏸️ Pause' : '▶️ Play'}
                   </button>
                 ` : medium.source === 'local' ? `
+                  ${cloudUser ? `
+                  <button class="btn btn-sm btn-outline" onclick="cloudMediumNachladen('${medium.id}')">
+                    ☁️ Aus Cloud laden
+                  </button>
+                  ` : ''}
                   <button class="btn btn-sm btn-outline" onclick="reloadLocalFile('${medium.id}')">
-                    📂 Datei neu laden
+                    📂 Datei ${cloudUser ? 'von Festplatte wählen' : 'neu laden'}
                   </button>
                 ` : ''}
                 
@@ -11969,6 +11979,45 @@ ${text}`;
 
         renumberCuesInOrder(['lx', 'q']);
         saveProjektDaten();
+      }
+    }
+
+    // Eine einzelne fehlende/kaputte Mediendatei gezielt nochmals aus der Cloud
+    // laden (statt wie reloadLocalFile() die Festplatte zu öffnen). Wird nur
+    // angeboten, wenn eine Cloud-Produktion angemeldet ist.
+    async function cloudMediumNachladen(mediumId) {
+      if (!cloudUser) { reloadLocalFile(mediumId); return; }
+      const medium = state.medien.find(m => m.id === mediumId);
+      if (!medium) return;
+
+      showFormatToast('⬇️ Datei wird aus der Cloud geladen …');
+      try {
+        const { data: eintraege, error: listErr } = await db.from('rebu_medien').select('*').eq('medium_id', mediumId);
+        const eintrag = eintraege && eintraege[0];
+        if (listErr || !eintrag) {
+          showFormatToast('⚠️ Diese Datei ist nicht in der Cloud hinterlegt.');
+          return;
+        }
+        const { data: blob, error } = await db.storage.from('rebu-medien')
+          .download(cloudUser.id + '/' + mediumId);
+        if (error || !blob) {
+          showFormatToast('⚠️ Laden aus der Cloud fehlgeschlagen.');
+          return;
+        }
+        const datei = new File([blob], eintrag.dateiname || medium.filename || mediumId, { type: eintrag.mime || blob.type });
+        if (eintrag.art === 'bild') {
+          await saveImageToDB(mediumId, datei);
+        } else {
+          await saveAudioToDB(mediumId, datei);
+          medium.localFileUrl = createTrackedObjectURL(datei);
+          medium.audioStored = true;
+        }
+        saveProjektDaten();
+        render();
+        showFormatToast('✅ Datei geladen');
+      } catch (e) {
+        console.warn('Einzelnes Medium aus Cloud laden fehlgeschlagen:', mediumId, e);
+        showFormatToast('⚠️ Laden aus der Cloud fehlgeschlagen.');
       }
     }
 
